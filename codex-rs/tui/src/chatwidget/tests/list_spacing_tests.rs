@@ -45,7 +45,7 @@ async fn list_spacing_streams_compact_then_reflows_on_completion_or_interruption
                             controller.current_tail_display_lines(),
                         )
                     } else {
-                        chat.on_agent_message_delta(chunk.into());
+                        chat.on_agent_message_delta(chunk.into(), /*from_replay*/ false);
                         let controller = chat.stream_controller.as_mut().unwrap();
                         (
                             controller.on_commit_tick_batch(usize::MAX).0,
@@ -69,7 +69,10 @@ async fn list_spacing_streams_compact_then_reflows_on_completion_or_interruption
                 } else if plan {
                     chat.on_plan_item_completed(source.into());
                 } else {
-                    chat.finalize_completed_assistant_message(Some(source));
+                    chat.finalize_completed_assistant_message(
+                        Some(source),
+                        /*from_replay*/ false,
+                    );
                 }
                 let mut completed = None;
                 while let Ok(event) = rx.try_recv() {

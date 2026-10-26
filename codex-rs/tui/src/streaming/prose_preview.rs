@@ -4,15 +4,17 @@
 //! Rich prose withholds unfinished link destinations and follow-up directives until closure.
 //! Cropped previews skip completed directives atomically so their prompt text stays hidden.
 
-use super::render::render_source;
+use super::render::render_source_with_list_spacing;
 use crate::history_cell::HistoryRenderMode;
 use crate::inline_visualization::InlineVisualizationContext;
+use crate::local_image_links::LocalImageLinks;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::lines_with_sources_eq;
 use ratatui::text::Line;
 use std::collections::VecDeque;
 use std::ops::Range;
 use std::path::Path;
+use std::sync::Arc;
 
 const MAX_PREVIEW_BYTES: usize = 8192;
 
@@ -24,6 +26,7 @@ pub(super) enum PreviewMode {
 /// Tracks one append-only incomplete line; reset when a newline is committed.
 #[derive(Default)]
 pub(super) struct ProsePreview {
+    pub(super) local_image_links: Option<Arc<LocalImageLinks>>,
     pub(super) lines: Vec<HyperlinkLine>,
     scanned_len: usize,
     safe_len: usize,
@@ -102,12 +105,14 @@ impl ProsePreview {
             start = range.end;
         }
         let mut lines = match mode {
-            PreviewMode::Prose(render_mode) => render_source(
+            PreviewMode::Prose(render_mode) => render_source_with_list_spacing(
                 &source[start..],
                 width,
                 cwd,
                 render_mode,
                 inline_visualization_context,
+                crate::markdown_render::ListSpacing::AfterMultiline,
+                self.local_image_links.as_deref(),
             ),
             PreviewMode::Math => textwrap::wrap(&source[start..], width.unwrap_or(usize::MAX))
                 .into_iter()

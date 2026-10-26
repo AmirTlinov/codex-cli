@@ -32,6 +32,7 @@ fn lists_preserve_layout() {
             /*cwd*/ None,
             &|_| false,
             ListSpacing::AfterMultiline,
+            /*local_image_links*/ None,
         );
         assert_eq!(
             Text::from(crate::terminal_hyperlinks::visible_lines(streamed.lines)),

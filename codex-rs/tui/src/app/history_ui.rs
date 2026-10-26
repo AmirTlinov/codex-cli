@@ -284,6 +284,13 @@ impl App {
         }
     }
 
+    pub(super) fn open_transcript_link(&mut self, url: String) {
+        if let Err(error) = crate::local_image_links::open_link(&url) {
+            self.chat_widget
+                .add_error_message(format!("Could not open link: {error}"));
+        }
+    }
+
     pub(super) fn open_desktop_thread(&mut self, thread_id: ThreadId) {
         let url = format!("codex://threads/{thread_id}");
         if let Err(err) = open_desktop_thread_url(&url) {

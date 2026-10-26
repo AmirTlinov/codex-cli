@@ -31,7 +31,8 @@ fn unicode_math_inline_stream_preserves_display_exclusion_boundaries() {
                     &source,
                     Some(40),
                     Some(&cwd),
-                    crate::markdown_render::ListSpacing::AfterMultiline
+                    crate::markdown_render::ListSpacing::AfterMultiline,
+                    /*local_image_links*/ None,
                 )
                 .lines
             );
@@ -51,6 +52,7 @@ fn unicode_math_inline_stream_preserves_display_exclusion_boundaries() {
                         Some(width),
                         Some(&cwd),
                         crate::markdown_render::ListSpacing::AfterMultiline,
+                        /*local_image_links*/ None,
                     )
                     .lines
                 );

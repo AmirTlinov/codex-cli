@@ -164,6 +164,7 @@ mod hooks_rpc;
 mod ide_context;
 mod inline_visualization;
 pub(crate) mod insert_history;
+mod local_image_links;
 mod managed_worktree_tool_specs;
 mod managed_worktree_tools;
 mod terminal_program_status;

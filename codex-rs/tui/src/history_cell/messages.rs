@@ -4,6 +4,7 @@
 use super::markdown_render_cache::MarkdownRenderCache;
 use super::*;
 use crate::async_question_reply::AsyncQuestionReply;
+use crate::local_image_links::LocalImageLinks;
 use crate::style::accent_color_on;
 use crate::style::history_prompt_style;
 use crate::terminal_hyperlinks::annotate_web_urls;
@@ -544,9 +545,15 @@ pub(crate) struct AgentMarkdownCell {
     rendered_lines: Option<MarkdownRenderCache>,
     spoken_artifacts: bool,
     question_titles: Vec<std::ops::Range<usize>>,
+    local_image_links: Option<LocalImageLinks>,
 }
 
 impl AgentMarkdownCell {
+    pub(crate) fn with_local_image_links(mut self, enabled: bool) -> Self {
+        self.local_image_links = enabled.then(|| LocalImageLinks::new(&self.cwd));
+        self
+    }
+
     pub(crate) fn with_copy_source(mut self, source: Option<String>) -> Self {
         self.copy_source = source;
         self
@@ -584,6 +591,7 @@ impl AgentMarkdownCell {
             rendered_lines,
             spoken_artifacts: false,
             question_titles: Vec::new(),
+            local_image_links: None,
         }
     }
 
@@ -652,6 +660,7 @@ impl AgentMarkdownCell {
                     Some(self.cwd.as_path()),
                     self.inline_visualization_context.as_ref(),
                     list_spacing,
+                    self.local_image_links.as_ref(),
                 )
             };
             let lines = if self.question_titles.is_empty() {

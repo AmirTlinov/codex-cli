@@ -1205,6 +1205,7 @@ pub(crate) enum AppEvent {
         copy_source: Option<String>,
         cwd: PathBuf,
         inline_visualization_context: Option<InlineVisualizationContext>,
+        local_image_links_enabled: bool,
         scrollback_reflow: ConsolidationScrollbackReflow,
         deferred_history_cell: Option<Box<dyn HistoryCell>>,
     },

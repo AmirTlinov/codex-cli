@@ -46,6 +46,7 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::HistoryRenderMode;
 use crate::history_cell::{self};
 use crate::inline_visualization::InlineVisualizationContext;
+use crate::local_image_links::LocalImageLinks;
 use crate::markdown::render_markdown_agent_with_list_spacing;
 use crate::markdown_render::ListSpacing;
 use crate::style::proposed_plan_style;
@@ -55,6 +56,7 @@ use ratatui::prelude::Stylize;
 use ratatui::text::Line;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -179,6 +181,7 @@ impl StreamCore {
     }
 
     fn refresh_preview(&mut self) -> bool {
+        self.preview.local_image_links = self.render.local_image_links.clone();
         let pending = self.state.collector.pending_source();
         let prose_preview = self.holdback_scanner.allows_prose_preview();
         let math = self.render_mode == HistoryRenderMode::Rich
@@ -218,6 +221,7 @@ impl StreamCore {
             self.render_mode,
             self.inline_visualization_context.as_ref(),
             self.render.list_spacing,
+            self.render.local_image_links.as_deref(),
         );
         let remaining = rendered.split_off(self.emitted_stable_len.min(rendered.len()));
         (remaining, source)
@@ -399,6 +403,7 @@ impl StreamCore {
                     mode,
                     self.inline_visualization_context.as_ref(),
                     self.render.list_spacing,
+                    self.render.local_image_links.as_deref(),
                 )
                 .len()
             };
@@ -566,6 +571,7 @@ impl StreamCore {
             Some(self.cwd.as_path()),
             self.inline_visualization_context.as_ref(),
             self.render.list_spacing,
+            self.render.local_image_links.as_deref(),
         );
         let stable_prefix_len = stable_prefix_render.len();
         tracing::trace!(
@@ -593,6 +599,16 @@ pub(crate) struct StreamController {
 }
 
 impl StreamController {
+    pub(crate) fn local_image_links_enabled(&self) -> bool {
+        self.core.render.local_image_links.is_some()
+    }
+
+    pub(crate) fn with_local_image_links(mut self, enabled: bool) -> Self {
+        self.core.render.local_image_links =
+            enabled.then(|| Arc::new(LocalImageLinks::new(&self.core.cwd)));
+        self
+    }
+
     /// Select spacing before the first delta; final source-backed cells choose their own layout.
     pub(crate) fn with_list_spacing(mut self, list_spacing: ListSpacing) -> Self {
         self.core.render.list_spacing = list_spacing;

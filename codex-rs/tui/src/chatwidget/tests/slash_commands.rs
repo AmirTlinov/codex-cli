@@ -1240,7 +1240,10 @@ async fn interrupted_merged_message_history_encodes_mentions_once() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
-    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_agent_message_delta(
+        "Final answer line\n".to_string(),
+        /*from_replay*/ false,
+    );
     let text = "use $figma now";
     chat.bottom_pane.set_composer_text_with_mention_bindings(
         text.to_string(),

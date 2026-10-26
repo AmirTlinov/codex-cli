@@ -387,7 +387,7 @@ async fn safety_buffering_retry_confirmation_closes_when_response_starts() {
     assert!(chat.can_retry_safety_buffered_turn(turn_id));
     open_safety_buffering_retry_confirmation(&mut chat, &mut rx);
 
-    chat.on_agent_message_delta("Visible response".to_string());
+    chat.on_agent_message_delta("Visible response".to_string(), /*from_replay*/ false);
 
     assert!(!chat.can_retry_safety_buffered_turn(turn_id));
     let popup = render_bottom_popup(&chat, /*width*/ 80);

@@ -449,7 +449,7 @@ async fn unified_exec_begin_restores_working_status_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.on_task_started();
-    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_agent_message_delta("Preamble line\n".to_string(), /*from_replay*/ false);
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
@@ -1096,7 +1096,10 @@ async fn image_generation_begin_restores_working_status_after_single_line_preamb
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.on_task_started();
-    chat.on_agent_message_delta("Generating an image.".to_string());
+    chat.on_agent_message_delta(
+        "Generating an image.".to_string(),
+        /*from_replay*/ false,
+    );
     chat.on_image_generation_begin();
 
     assert!(chat.bottom_pane.is_task_running());

@@ -50,7 +50,7 @@ pub(crate) struct TerminalHyperlink {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DestinationKind {
     Web,
-    /// A generated visualization or a capability-validated spoken workspace artifact.
+    /// A generated visualization, validated workspace artifact, or local image.
     TrustedFile,
 }
 
@@ -105,9 +105,17 @@ impl TerminalHyperlink {
         }
     }
 
+    pub(crate) fn local_image(destination: &Url) -> Self {
+        Self {
+            columns: 0..0,
+            destination: destination.to_string(),
+            destination_kind: DestinationKind::TrustedFile,
+        }
+    }
+
     pub(crate) fn retarget_to_trusted_file(&mut self, destination: &Url) {
-        // General Markdown never promotes file URLs. Only generated visualization links use this
-        // path; spoken workspace artifacts require a separately validated capability.
+        // Generated visualizations use this path. Markdown images and spoken workspace artifacts
+        // require separately validated capabilities.
         debug_assert_eq!(destination.scheme(), "file");
         self.destination = destination.to_string();
         self.destination_kind = DestinationKind::TrustedFile;
@@ -190,15 +198,25 @@ impl HyperlinkLine {
     }
 
     pub(crate) fn push_span(&mut self, span: Span<'static>, destination: Option<&str>) {
+        let hyperlink = destination
+            .and_then(web_destination)
+            .map(|destination| TerminalHyperlink::web(0..0, destination));
+        self.push_linked_span(span, hyperlink.as_ref());
+    }
+
+    pub(crate) fn push_linked_span(
+        &mut self,
+        span: Span<'static>,
+        hyperlink: Option<&TerminalHyperlink>,
+    ) {
         self.source = None;
         let start = self.width();
         let end = start + display_width(span.content.as_ref());
         self.line.push_span(span);
         if end > start
-            && let Some(destination) = destination.and_then(web_destination)
+            && let Some(hyperlink) = hyperlink
         {
-            self.hyperlinks
-                .push(TerminalHyperlink::web(start..end, destination));
+            self.hyperlinks.push(hyperlink.with_columns(start..end));
         }
     }
 

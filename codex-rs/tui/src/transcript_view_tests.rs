@@ -48,6 +48,54 @@ fn prompt(text: impl Into<String>) -> Arc<dyn HistoryCell> {
     ))
 }
 
+#[test]
+fn wrapped_local_image_links_open_the_full_target_on_every_row() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("кадр 01.png");
+    image::RgbImage::new(/*width*/ 1, /*height*/ 1).save(&path)?;
+    let destination = url::Url::from_file_path(path.canonicalize()?).unwrap();
+    let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(
+        crate::history_cell::AgentMarkdownCell::new(
+            "[A long image label with 中文 characters](<кадр 01.png>)".to_owned(),
+            directory.path(),
+        )
+        .with_local_image_links(/*enabled*/ true),
+    )];
+    let mut view = TranscriptView::default();
+    let buffer = render(&mut view, &cells, /*width*/ 16, /*height*/ 12);
+    let mut linked_rows = std::collections::BTreeSet::new();
+    for row in 0..12 {
+        for column in 0..16 {
+            if !buffer[(column, row)]
+                .symbol()
+                .contains(destination.as_str())
+            {
+                continue;
+            }
+            linked_rows.insert(row);
+            for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
+                let action = view.handle_mouse(
+                    MouseEvent {
+                        kind: MouseEventKind::Down(MouseButton::Left),
+                        column,
+                        row,
+                        modifiers,
+                    },
+                    &cells,
+                );
+                assert!(
+                    matches!(action, Some(ViewAction::OpenLink(url)) if url == destination.as_str())
+                );
+            }
+        }
+    }
+    assert!(
+        linked_rows.len() > 1,
+        "fixture must have clickable wrapped rows"
+    );
+    Ok(())
+}
+
 pub(super) fn render(
     view: &mut TranscriptView,
     cells: &[Arc<dyn HistoryCell>],

@@ -253,6 +253,7 @@ fn streaming_and_full_render_agree_with_label_only_links() {
                 /*cwd*/ None,
                 &|destination| display.hide_destination(destination),
                 crate::markdown_render::ListSpacing::AfterMultiline,
+                /*local_image_links*/ None,
             );
             assert_eq!(streamed.lines, render(prefix, width, display));
         }

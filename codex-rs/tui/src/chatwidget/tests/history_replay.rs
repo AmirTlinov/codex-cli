@@ -15,6 +15,64 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
+async fn image_link_capability_follows_the_message_through_consolidation() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("кадр 01.png");
+    image::RgbImage::new(/*width*/ 1, /*height*/ 1)
+        .save(&path)
+        .unwrap();
+    let source = format!("[View image](<{}>)", path.display());
+    for from_replay in [false, true] {
+        for streamed in [false, true] {
+            let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+            chat.local_image_links_enabled = true;
+            if streamed {
+                chat.on_agent_message_delta(source.clone(), from_replay);
+                // A later session setting must not reinterpret the origin of the stream.
+                chat.local_image_links_enabled = false;
+            }
+            chat.finalize_completed_assistant_message(Some(&source), from_replay);
+            let mut consolidated = false;
+            while let Ok(event) = rx.try_recv() {
+                if let AppEvent::ConsolidateAgentMessage {
+                    local_image_links_enabled,
+                    ..
+                } = event
+                {
+                    assert_eq!(local_image_links_enabled, !from_replay);
+                    consolidated = true;
+                }
+            }
+            assert!(consolidated);
+        }
+    }
+}
+
+#[tokio::test]
+async fn replayed_image_stream_stays_unlinked_when_live_output_resumes() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.local_image_links_enabled = true;
+    chat.on_agent_message_delta("[Preview]".to_owned(), /*from_replay*/ true);
+    chat.on_agent_message_delta("(./preview.png)".to_owned(), /*from_replay*/ false);
+    chat.finalize_completed_assistant_message(
+        Some("[Preview](./preview.png)"),
+        /*from_replay*/ false,
+    );
+    let mut consolidated = false;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::ConsolidateAgentMessage {
+            local_image_links_enabled,
+            ..
+        } = event
+        {
+            assert!(!local_image_links_enabled);
+            consolidated = true;
+        }
+    }
+    assert!(consolidated);
+}
+
+#[tokio::test]
 async fn resumed_initial_messages_render_history() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_feature_enabled(Feature::CliDaybreak, /*enabled*/ false);
@@ -997,7 +1055,7 @@ async fn forked_thread_history_line_without_name_shows_id_once_snapshot() {
 async fn prompt_edit_stops_streaming_without_submitting_queued_input() {
     let (mut chat, _events, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.on_task_started();
-    chat.on_agent_message_delta("removed response".into());
+    chat.on_agent_message_delta("removed response".into(), /*from_replay*/ false);
     chat.queue_user_message("queued follow-up".into());
     chat.enter_review_mode_with_hint("review".into(), /*from_replay*/ false);
 

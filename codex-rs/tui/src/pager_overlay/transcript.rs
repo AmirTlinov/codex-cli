@@ -550,7 +550,7 @@ impl TranscriptOverlay {
                 Err(error) => error,
             });
         } else if let ViewAction::OpenLink(url) = action
-            && let Err(error) = webbrowser::open(&url)
+            && let Err(error) = crate::local_image_links::open_link(&url)
         {
             self.notice = Some(format!("Could not open link: {error}"));
         }

@@ -93,6 +93,7 @@ fn disabled_tables_keep_markdown_fences_and_cell_markup() {
         /*width*/ None,
         /*cwd*/ None,
         crate::markdown_render::ListSpacing::AfterMultiline,
+        /*local_image_links*/ None,
     );
     assert_eq!(
         Text::from(visible_lines(streamed.lines)).to_string(),

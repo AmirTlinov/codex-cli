@@ -203,6 +203,7 @@ fn unicode_math_rejected_display_keeps_its_closer_and_following_text() {
                     Some(40),
                     Some(&cwd),
                     crate::markdown_render::ListSpacing::AfterMultiline,
+                    /*local_image_links*/ None,
                 );
                 assert_eq!(
                     (&render.lines, render.pending_math_start),

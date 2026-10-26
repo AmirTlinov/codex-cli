@@ -23,6 +23,7 @@ fn followup_labels_render_like_ordinary_markdown_snapshot() {
         /*cwd*/ None,
         &|_| false,
         ListSpacing::AfterMultiline,
+        /*local_image_links*/ None,
     );
     let rendered = Text::from(visible_lines(streamed.lines));
     assert_eq!(

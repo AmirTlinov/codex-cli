@@ -22,6 +22,7 @@ fn list_spacing_is_uniform_per_list_and_preserves_item_paragraphs() {
                 /*cwd*/ None,
                 /*inline_visualization_context*/ None,
                 spacing,
+                /*local_image_links*/ None,
             );
             stages.push(format!(
                 "{spacing:?}:\n{}",
@@ -46,6 +47,7 @@ fn list_spacing_preserves_links_and_source_when_removing_separators() {
             /*cwd*/ None,
             /*inline_visualization_context*/ None,
             spacing,
+            /*local_image_links*/ None,
         )
     };
     let compact = render(ListSpacing::Compact);

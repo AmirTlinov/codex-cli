@@ -20,6 +20,7 @@
 //! buffers the entire fence body before deciding, only unwraps fences whose
 //! info string is `md` or `markdown` AND whose body contains a
 //! header+delimiter pair, and degrades gracefully on unclosed fences.
+use crate::local_image_links::LocalImageLinks;
 use pulldown_cmark::CodeBlockKind;
 use pulldown_cmark::Event;
 use pulldown_cmark::Tag;
@@ -112,6 +113,7 @@ pub(crate) fn render_markdown_agent_with_links_and_cwd(
         cwd,
         /*inline_visualization_context*/ None,
         ListSpacing::AfterMultiline,
+        /*local_image_links*/ None,
     )
 }
 
@@ -121,6 +123,7 @@ pub(crate) fn render_markdown_agent_with_list_spacing(
     cwd: Option<&Path>,
     inline_visualization_context: Option<&InlineVisualizationContext>,
     list_spacing: ListSpacing,
+    local_image_links: Option<&LocalImageLinks>,
 ) -> Vec<HyperlinkLine> {
     let rewritten = rewrite_inline_visualizations(markdown_source, inline_visualization_context);
     let mut code_sources = Vec::new();
@@ -140,6 +143,7 @@ pub(crate) fn render_markdown_agent_with_list_spacing(
         &is_hidden_link_destination,
         list_spacing,
         code_sources,
+        local_image_links,
     )
     .lines;
     for hyperlink in lines.iter_mut().flat_map(|line| &mut line.hyperlinks) {
@@ -160,6 +164,7 @@ pub(crate) fn render_streaming_markdown_agent_with_links_and_cwd(
     width: Option<usize>,
     cwd: Option<&Path>,
     list_spacing: ListSpacing,
+    local_image_links: Option<&LocalImageLinks>,
 ) -> crate::markdown_render::StreamingMarkdownRender {
     let normalized = normalize_markdown_for_rendering(markdown_source);
     let mut rendered = crate::markdown_render::render_streaming_markdown_lines_with_width_and_cwd(
@@ -168,6 +173,7 @@ pub(crate) fn render_streaming_markdown_agent_with_links_and_cwd(
         cwd,
         &crate::markdown_render::hide_web_link_destination,
         list_spacing,
+        local_image_links,
     );
     if normalized != markdown_source {
         // Fence unwrapping removes opening/closing lines. A normalized tail that is still a raw
