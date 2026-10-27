@@ -874,12 +874,12 @@ fn web_link_labels_use_link_style_and_preserve_inline_formatting() {
     set_syntax_theme(syntect::highlighting::Theme::default());
     for (label, expected_label) in [
         ("plain", "plain".underlined()),
-        ("`code`", Span::styled("code", MarkdownStyles::default().code).underlined()),
-        ("**bold**", "bold".bold().underlined()),
         (
-            "*italic*",
-            "italic".italic().underlined(),
+            "`code`",
+            Span::styled("code", MarkdownStyles::default().code).underlined(),
         ),
+        ("**bold**", "bold".bold().underlined()),
+        ("*italic*", "italic".italic().underlined()),
     ] {
         let text = render_markdown_text(&format!(
             "before [{label}](https://example.com) after `code`"
