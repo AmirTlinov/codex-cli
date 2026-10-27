@@ -1908,7 +1908,7 @@ impl Session {
             hook_mcp_executor
                 .session
                 .set(Arc::downgrade(&sess))
-                .expect("MCP hook session is bound once");
+                .map_err(|_| anyhow::anyhow!("MCP hook session is already bound"))?;
             if let Some(startup) = &startup {
                 startup.set_session(Arc::clone(&sess));
             }
