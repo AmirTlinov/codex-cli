@@ -33,7 +33,7 @@ fn bare_urls_are_styled_without_coloring_surrounding_prose() {
             "); ".into(),
             Span::styled("https://example.com/b", MarkdownStyles::default().link),
             "! ".into(),
-            Span::styled("https://example.com/c", MarkdownStyles::default().link).bold(),
+            Span::styled("https://example.com/c", MarkdownStyles::default().strong).underlined(),
         ])),
     );
     assert_debug_snapshot!(text);
@@ -106,15 +106,15 @@ fn supporting_terminals_render_only_the_styled_label_and_keep_its_target() {
             ),
             (
                 "[`label`](https://example.com)",
-                Span::styled("label", MarkdownStyles::default().link),
+                Span::styled("label", MarkdownStyles::default().code).underlined(),
             ),
             (
                 "[**label**](https://example.com)",
-                Span::styled("label", MarkdownStyles::default().link).bold(),
+                Span::styled("label", MarkdownStyles::default().strong).underlined(),
             ),
             (
                 "[*label*](https://example.com)",
-                Span::styled("label", MarkdownStyles::default().link).italic(),
+                Span::styled("label", MarkdownStyles::default().emphasis).underlined(),
             ),
             (
                 "[<b>](https://example.com)",
@@ -253,6 +253,7 @@ fn streaming_and_full_render_agree_with_label_only_links() {
                 /*cwd*/ None,
                 &|destination| display.hide_destination(destination),
                 crate::markdown_render::ListSpacing::AfterMultiline,
+                /*local_image_links*/ None,
             );
             assert_eq!(streamed.lines, render(prefix, width, display));
         }

@@ -143,6 +143,7 @@ impl ChatWidget {
             snapshot_local_images: false,
             pending_image_submission: None,
             local_worktree_operations: true,
+            local_image_links_enabled: false,
             windows_sandbox_local_server: false,
             windows_sandbox_config: Default::default(),
             windows_sandbox_host: crate::app::WindowsSandboxHost::Unknown,

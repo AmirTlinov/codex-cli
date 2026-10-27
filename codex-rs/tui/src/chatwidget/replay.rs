@@ -422,7 +422,7 @@ impl ChatWidget {
                 );
             }
             ThreadItemPayload::ImageView { id, path } => {
-                self.on_view_image_tool_call(id, path);
+                self.on_view_image_tool_call(id, path, from_replay);
             }
             ThreadItemPayload::ImageGeneration(item) => {
                 self.on_image_generation_end(

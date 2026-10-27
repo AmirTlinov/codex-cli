@@ -71,6 +71,10 @@ impl ChatWidget {
         display: SessionConfiguredDisplay,
         fork_parent_title: Option<String>,
     ) {
+        self.local_image_links_enabled = crate::local_image_links::enabled_for_session(
+            self.snapshot_local_images,
+            session.windows_sandbox_host,
+        );
         self.windows_sandbox_host =
             if !self.windows_sandbox_local_server && self.remote_connection.is_some() {
                 crate::app::WindowsSandboxHost::Remote

@@ -9,7 +9,7 @@ async fn suppressed_interrupted_turn_notice_skips_history_warning() {
     chat.thread_id = Some(ThreadId::new());
     chat.set_interrupted_turn_notice_mode(InterruptedTurnNoticeMode::Suppress);
     chat.on_task_started();
-    chat.on_agent_message_delta("partial output".to_string());
+    chat.on_agent_message_delta("partial output".to_string(), /*from_replay*/ false);
 
     chat.on_interrupted_turn(TurnAbortReason::Interrupted);
 

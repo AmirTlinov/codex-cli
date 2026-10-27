@@ -563,6 +563,7 @@ pub(crate) struct ChatWidget {
     pub(crate) snapshot_local_images: bool,
     pending_image_submission: Option<image_submission::PendingImageSubmission>,
     pub(crate) local_worktree_operations: bool,
+    pub(crate) local_image_links_enabled: bool,
     pub(crate) windows_sandbox_local_server: bool,
     pub(crate) windows_sandbox_config: crate::windows_sandbox::WindowsSandboxConfig,
     pub(crate) windows_sandbox_host: crate::app::WindowsSandboxHost,

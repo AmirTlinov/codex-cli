@@ -138,7 +138,7 @@ impl ChatWidget {
                 {
                     self.transcript.active_streamed_agent_message =
                         Some((notification.turn_id, notification.item_id));
-                    self.on_agent_message_delta(notification.delta);
+                    self.on_agent_message_delta(notification.delta, from_replay);
                 }
             }
             ServerNotification::PlanDelta(notification) => {

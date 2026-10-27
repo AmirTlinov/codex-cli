@@ -75,7 +75,7 @@ impl App {
                 if let Some((characters, result)) = copied {
                     self.transcript_view.show_copy_feedback(&result, characters);
                 } else if let ViewAction::OpenLink(url) = action {
-                    self.open_url_in_browser(url);
+                    self.open_transcript_link(url);
                 }
             }
         }

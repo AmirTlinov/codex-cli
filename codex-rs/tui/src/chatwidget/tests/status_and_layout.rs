@@ -2255,7 +2255,10 @@ async fn streaming_final_answer_keeps_task_running_state() {
     chat.thread_id = Some(ThreadId::new());
 
     chat.on_task_started();
-    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_agent_message_delta(
+        "Final answer line\n".to_string(),
+        /*from_replay*/ false,
+    );
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
@@ -2471,7 +2474,10 @@ async fn idle_commit_ticks_do_not_restore_status_without_commentary_completion()
     chat.on_task_started();
     assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
 
-    chat.on_agent_message_delta("Final answer line\n".to_string());
+    chat.on_agent_message_delta(
+        "Final answer line\n".to_string(),
+        /*from_replay*/ false,
+    );
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
@@ -2491,10 +2497,16 @@ async fn final_answer_completion_restores_status_indicator_for_pending_steer() {
     chat.on_task_started();
     assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
 
-    chat.on_agent_message_delta("Long output line 1\n".to_string());
+    chat.on_agent_message_delta(
+        "Long output line 1\n".to_string(),
+        /*from_replay*/ false,
+    );
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
-    chat.on_agent_message_delta("Long output line 2\n".to_string());
+    chat.on_agent_message_delta(
+        "Long output line 2\n".to_string(),
+        /*from_replay*/ false,
+    );
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
@@ -2549,7 +2561,7 @@ async fn commentary_completion_restores_status_indicator_before_exec_begin() {
     chat.on_task_started();
     assert_eq!(chat.bottom_pane.status_indicator_visible(), true);
 
-    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_agent_message_delta("Preamble line\n".to_string(), /*from_replay*/ false);
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
 
@@ -2979,7 +2991,7 @@ async fn stream_error_updates_status_indicator() {
 async fn stream_error_restores_hidden_status_indicator() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.on_task_started();
-    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_agent_message_delta("Preamble line\n".to_string(), /*from_replay*/ false);
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
     assert!(!chat.bottom_pane.status_indicator_visible());
@@ -4874,7 +4886,7 @@ async fn unterminated_prose_is_visible_before_completion() {
             if mode == ModeKind::Plan {
                 chat.on_plan_delta(delta.to_string());
             } else {
-                chat.handle_streaming_delta(delta.to_string());
+                chat.handle_streaming_delta(delta.to_string(), /*from_replay*/ false);
             }
         }
 
@@ -4899,7 +4911,7 @@ async fn unterminated_prose_is_visible_before_completion() {
         if mode == ModeKind::Plan {
             chat.on_plan_delta(" | partial row".to_string());
         } else {
-            chat.handle_streaming_delta(" | partial row".to_string());
+            chat.handle_streaming_delta(" | partial row".to_string(), /*from_replay*/ false);
         }
         assert_eq!(
             chat.transcript
@@ -4915,13 +4927,13 @@ async fn unterminated_prose_is_visible_before_completion() {
 #[tokio::test]
 async fn unterminated_agent_delta_does_not_redraw_unchanged_stream_tail() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.handle_streaming_delta("| Step | Owner |\n".to_string());
+    chat.handle_streaming_delta("| Step | Owner |\n".to_string(), /*from_replay*/ false);
     assert!(chat.active_cell_is_stream_tail());
     let revision = chat.transcript.active_cell_revision;
 
     let (frame_requester, mut draw_rx) = FrameRequester::test_channel();
     chat.frame_requester = frame_requester;
-    chat.handle_streaming_delta("| partial".to_string());
+    chat.handle_streaming_delta("| partial".to_string(), /*from_replay*/ false);
 
     assert_eq!(chat.transcript.active_cell_revision, revision);
     assert!(matches!(
@@ -4941,12 +4953,15 @@ async fn newline_agent_delta_redraws_stream_tail_after_noop_catch_up() {
     )
     .await;
     chat.on_task_started();
-    chat.handle_streaming_delta("Earlier line\n".to_string());
+    chat.handle_streaming_delta("Earlier line\n".to_string(), /*from_replay*/ false);
     chat.on_commit_tick();
     assert!(!chat.bottom_pane.status_indicator_visible());
     while draw_rx.try_recv().is_ok() {}
 
-    chat.handle_streaming_delta("Intro line\n| Step | Owner |\n".to_string());
+    chat.handle_streaming_delta(
+        "Intro line\n| Step | Owner |\n".to_string(),
+        /*from_replay*/ false,
+    );
 
     assert!(chat.active_cell_is_stream_tail());
     assert!(
@@ -5062,7 +5077,7 @@ async fn reasoning_delta_restores_recreated_status_indicator_header() {
     chat.on_task_started();
     chat.on_agent_reasoning_delta("**Checking files**".to_string());
 
-    chat.on_agent_message_delta("Preamble line\n".to_string());
+    chat.on_agent_message_delta("Preamble line\n".to_string(), /*from_replay*/ false);
     chat.on_commit_tick();
     drain_insert_history(&mut rx);
     assert!(!chat.bottom_pane.status_indicator_visible());

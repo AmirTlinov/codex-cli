@@ -12,9 +12,18 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_patch_event(changes, &self.config.cwd));
     }
 
-    pub(super) fn on_view_image_tool_call(&mut self, id: String, path: LegacyAppPathString) {
+    pub(super) fn on_view_image_tool_call(
+        &mut self,
+        id: String,
+        path: LegacyAppPathString,
+        from_replay: bool,
+    ) {
         self.flush_answer_stream_with_separator();
-        self.add_to_history(history_cell::new_view_image_tool_call(id, path));
+        let mut cell = history_cell::new_view_image_tool_call(id, path);
+        if self.local_image_links_enabled && !from_replay {
+            cell = cell.with_local_image_link();
+        }
+        self.add_to_history(cell);
         self.request_redraw();
     }
 

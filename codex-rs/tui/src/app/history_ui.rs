@@ -284,6 +284,19 @@ impl App {
         }
     }
 
+    pub(super) fn open_transcript_link(&mut self, url: String) {
+        let event_tx = self.app_event_tx.clone();
+        let result = crate::local_image_links::open_link_in_background(url, move |error| {
+            event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_error_event(error),
+            )));
+        });
+        if let Err(error) = result {
+            self.chat_widget
+                .add_error_message(format!("Could not start link opener: {error}"));
+        }
+    }
+
     pub(super) fn open_desktop_thread(&mut self, thread_id: ThreadId) {
         let url = format!("codex://threads/{thread_id}");
         if let Err(err) = open_desktop_thread_url(&url) {

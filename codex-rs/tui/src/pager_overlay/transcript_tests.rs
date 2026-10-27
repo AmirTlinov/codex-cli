@@ -28,6 +28,68 @@ fn transcript_overlay(cells: Vec<Arc<dyn HistoryCell>>) -> TranscriptOverlay {
     TranscriptOverlay::new(cells, default_pager_keymap())
 }
 
+#[tokio::test]
+async fn image_open_failure_is_visible_in_transcript_and_browsing_footers() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("preview.png");
+    image::RgbImage::new(/*width*/ 1, /*height*/ 1).save(&path)?;
+    let destination = url::Url::from_file_path(path.canonicalize()?).unwrap();
+    let cell: Arc<dyn HistoryCell> = Arc::new(
+        history_cell::new_view_image_tool_call(
+            "view".into(),
+            codex_utils_path_uri::LegacyAppPathString::from_path(&path),
+        )
+        .with_local_image_link(),
+    );
+    std::fs::remove_file(path)?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    let area = Rect::new(
+        /*x*/ 0, /*y*/ 0, /*width*/ 100, /*height*/ 12,
+    );
+    for browsing in [false, true] {
+        let mut overlay = transcript_overlay(vec![cell.clone()]);
+        if browsing {
+            overlay.browsing_footer = Some("browsing prompts".into());
+        }
+        let mut buffer = Buffer::empty(area);
+        overlay.render(area, &mut buffer);
+        let (column, row) = (area.y..area.bottom())
+            .flat_map(|row| (area.x..area.right()).map(move |column| (column, row)))
+            .find(|&(column, row)| {
+                buffer[(column, row)]
+                    .symbol()
+                    .contains(destination.as_str())
+            })
+            .expect("the viewed image filename must be clickable");
+        overlay.handle_event(
+            &mut tui,
+            TuiEvent::Mouse(crossterm::event::MouseEvent {
+                kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                column,
+                row,
+                modifiers: KeyModifiers::CONTROL,
+            }),
+        )?;
+        tokio::time::timeout(std::time::Duration::from_secs(/*secs*/ 5), async {
+            loop {
+                let mut buffer = Buffer::empty(area);
+                overlay.render(area, &mut buffer);
+                let text = buffer
+                    .content()
+                    .iter()
+                    .map(Cell::symbol)
+                    .collect::<String>();
+                if text.contains("Could not open link: image is no longer available") {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+    }
+    Ok(())
+}
+
 #[test]
 fn empty_pending_select_mode_closes_instead_of_retaining_overlay_focus() {
     let mut overlay = transcript_overlay(Vec::new());

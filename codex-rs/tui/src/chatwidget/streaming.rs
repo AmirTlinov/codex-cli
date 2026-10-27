@@ -90,6 +90,7 @@ impl ChatWidget {
     fn flush_answer_stream(&mut self, completed_message: Option<&str>) {
         let had_stream_controller = self.stream_controller.is_some();
         if let Some(mut controller) = self.stream_controller.take() {
+            let local_image_links = controller.local_image_links();
             let needs_scrollback_reflow = controller.needs_scrollback_reflow();
             self.clear_active_stream_tail();
             let (cell, streamed_source) = controller.finalize();
@@ -148,6 +149,7 @@ impl ChatWidget {
                     copy_source,
                     cwd: self.config.cwd.to_path_buf(),
                     inline_visualization_context,
+                    local_image_links,
                     scrollback_reflow,
                     deferred_history_cell,
                 });
@@ -212,7 +214,11 @@ impl ChatWidget {
             })
     }
 
-    pub(super) fn finalize_completed_assistant_message(&mut self, message: Option<&str>) {
+    pub(super) fn finalize_completed_assistant_message(
+        &mut self,
+        message: Option<&str>,
+        from_replay: bool,
+    ) {
         if self.stream_controller.is_none()
             && let Some(message) = message
             && !message.is_empty()
@@ -220,7 +226,7 @@ impl ChatWidget {
         {
             let displayed =
                 parse_assistant_markdown(message, self.config.cwd.as_path()).visible_markdown;
-            self.handle_streaming_delta(displayed);
+            self.handle_streaming_delta(displayed, from_replay);
         }
         // Item completion is authoritative. Use it for consolidation so any
         // deltas dropped by a saturated transport cannot truncate the transcript.
@@ -229,8 +235,8 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(super) fn on_agent_message_delta(&mut self, delta: String) {
-        self.handle_streaming_delta(delta);
+    pub(super) fn on_agent_message_delta(&mut self, delta: String, from_replay: bool) {
+        self.handle_streaming_delta(delta, from_replay);
     }
 
     pub(super) fn on_plan_delta(&mut self, delta: String) {
@@ -477,12 +483,13 @@ impl ChatWidget {
                     context,
                 )
                 .with_questions(questions)
+                .with_local_image_links(self.local_image_links_enabled && !from_replay)
                 .with_copy_source(Some(message.clone())),
             );
             self.handle_stream_finished();
             self.request_redraw();
         } else {
-            self.finalize_completed_assistant_message(Some(&message));
+            self.finalize_completed_assistant_message(Some(&message), from_replay);
         }
         if !parsed.visible_markdown.is_empty() {
             self.transcript
@@ -608,7 +615,7 @@ impl ChatWidget {
     }
 
     #[inline]
-    pub(super) fn handle_streaming_delta(&mut self, delta: String) {
+    pub(super) fn handle_streaming_delta(&mut self, delta: String, from_replay: bool) {
         if !delta.is_empty() {
             self.mark_safety_buffering_agent_message_started();
         }
@@ -627,6 +634,7 @@ impl ChatWidget {
                     self.history_render_mode(),
                     inline_visualization_context,
                 )
+                .with_local_image_links(self.local_image_links_enabled && !from_replay)
                 .with_list_spacing(
                     if self.local_settings.transcript_mode.is_owned() {
                         ListSpacing::Compact

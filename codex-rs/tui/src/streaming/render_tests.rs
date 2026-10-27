@@ -169,6 +169,7 @@ fn growing_single_top_level_blocks_render_and_scan_in_one_pass() {
                 width,
                 Some(cwd.as_path()),
                 crate::markdown_render::ListSpacing::AfterMultiline,
+                /*local_image_links*/ None,
             );
             assert_eq!(pending.last_top_level_block_start, None);
             assert_eq!(render.lines, pending.lines);
@@ -228,6 +229,7 @@ fn compact_list_spacing_keeps_incremental_and_full_renders_aligned() {
                     mode,
                     /*inline_visualization_context*/ None,
                     ListSpacing::Compact,
+                    /*local_image_links*/ None,
                 )
             );
         }
@@ -248,6 +250,7 @@ fn compact_list_spacing_keeps_incremental_and_full_renders_aligned() {
                     mode,
                     /*inline_visualization_context*/ None,
                     ListSpacing::Compact,
+                    /*local_image_links*/ None,
                 )
             );
         }

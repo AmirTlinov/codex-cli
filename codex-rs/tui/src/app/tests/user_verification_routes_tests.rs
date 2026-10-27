@@ -274,6 +274,7 @@ async fn inactive_thread_user_verification_preserves_foreground_stream() -> Resu
                 copy_source,
                 cwd,
                 inline_visualization_context,
+                local_image_links,
                 scrollback_reflow,
                 deferred_history_cell,
             } => {
@@ -285,7 +286,8 @@ async fn inactive_thread_user_verification_preserves_foreground_stream() -> Resu
                         &cwd,
                         inline_visualization_context,
                     )
-                    .with_copy_source(copy_source),
+                    .with_copy_source(copy_source)
+                    .with_captured_image_links(local_image_links),
                     scrollback_reflow,
                     deferred_history_cell,
                 )?;
