@@ -16,6 +16,7 @@ use crate::rmcp_client::CodexAppsStartupReconnect;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::ManagedClientFuture;
 use crate::rmcp_client::StartupOutcomeError;
+use crate::rmcp_client::ToolCatalogListing;
 use crate::rmcp_client::list_tools_for_client_uncached;
 use crate::runtime::McpRuntimeContext;
 use crate::server::EffectiveMcpServer;
@@ -485,6 +486,7 @@ async fn legacy_tool_catalog_rejects_repeated_pagination_cursor() -> anyhow::Res
 
 async fn create_test_managed_client(tools: Vec<ToolInfo>) -> ManagedClient {
     ManagedClient {
+        initial_catalog_freshness: None,
         connection_sharing: Default::default(),
         shared_elicitation: None,
         _auth_change_notifications: None,
@@ -812,6 +814,7 @@ pub(crate) async fn create_test_manager_with_ready_apps_client(
         .await?;
 
     let managed_client = ManagedClient {
+        initial_catalog_freshness: None,
         connection_sharing: Default::default(),
         shared_elicitation: None,
         _auth_change_notifications: None,
@@ -5823,7 +5826,11 @@ async fn reconciliation_reuses_connection_without_relisting_regular_tools() -> a
             }),
         )
         .await?;
-    let (initial_tools, initial_meta) = list_tools_for_client_uncached(
+    let ToolCatalogListing {
+        tools: initial_tools,
+        meta: initial_meta,
+        ..
+    } = list_tools_for_client_uncached(
         "docs",
         /*is_codex_apps_mcp_server*/ false,
         /*codex_apps_refresh_trigger*/ "test",
@@ -5834,6 +5841,7 @@ async fn reconciliation_reuses_connection_without_relisting_regular_tools() -> a
     )
     .await?;
     let managed_client = ManagedClient {
+        initial_catalog_freshness: None,
         connection_sharing: Default::default(),
         shared_elicitation: None,
         _auth_change_notifications: None,

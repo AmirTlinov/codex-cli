@@ -4,6 +4,9 @@
 //! Request continuations use the calling chat's elicitation authority. Legacy connections and
 //! servers that request input during startup remain private.
 
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -17,6 +20,8 @@ use codex_login::AuthManager;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::SendElicitation;
 use futures::FutureExt;
+use futures::future::BoxFuture;
+use futures::future::WeakShared;
 use rmcp::model::ElicitationAction;
 use rmcp::model::ProtocolVersion;
 use tokio_util::sync::CancellationToken;
@@ -24,9 +29,11 @@ use tokio_util::task::TaskTracker;
 
 use crate::client_tool_catalog::ClientToolCatalog;
 use crate::client_tool_catalog::ToolCatalogSnapshot;
+use crate::rmcp_client::CatalogFreshness;
 use crate::rmcp_client::ManagedClient;
 use crate::rmcp_client::ManagedClientFuture;
 use crate::rmcp_client::StartupOutcomeError;
+use crate::rmcp_client::ToolCatalogListing;
 use crate::rmcp_client::list_tools_for_client_uncached;
 use crate::server::McpServerConnectionIdentity;
 use crate::tool_catalog_cache::McpToolCatalogCacheContext;
@@ -34,7 +41,7 @@ use crate::tool_catalog_cache::McpToolCatalogCacheContext;
 /// Process-owned registry for compatible local stdio servers using MCP 2026-07-28.
 #[derive(Clone, Default)]
 pub struct McpConnectionPool {
-    entries: Arc<Mutex<Vec<Weak<Entry>>>>,
+    entries: Arc<Mutex<HashMap<Arc<ConnectionKey>, Weak<Entry>>>>,
 }
 
 #[derive(Clone)]
@@ -67,17 +74,51 @@ impl PartialEq for ConnectionKey {
     }
 }
 
+impl Eq for ConnectionKey {}
+
+impl Hash for ConnectionKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.server_name.hash(state);
+        self.identity.hash(state);
+        self.account.hash(state);
+        self.startup_timeout.hash(state);
+        self.catalog_item_limit.hash(state);
+        if let Some((manager, auth)) = &self.auth_state {
+            Arc::as_ptr(manager).hash(state);
+            auth.owner_generation.hash(state);
+            auth.source_generation.hash(state);
+            auth.login_generation.hash(state);
+        }
+    }
+}
+
 struct Entry {
-    key: ConnectionKey,
+    key: Arc<ConnectionKey>,
     client: ManagedClientFuture,
     capabilities: Arc<Mutex<Option<serde_json::Value>>>,
     // Share immutable definitions; every chat owns its catalog revisions and refresh locks.
-    catalog: Mutex<Option<ToolCatalogSnapshot>>,
+    catalog: Mutex<CatalogState>,
     cancellation: CancellationToken,
     /// Wakes joiners without cancelling the creator's startup.
     sharing_declined: CancellationToken,
     owners: Weak<LeaseOwners>,
-    pool: Weak<Mutex<Vec<Weak<Entry>>>>,
+    pool: Weak<Mutex<HashMap<Arc<ConnectionKey>, Weak<Entry>>>>,
+}
+
+type CatalogFetch = BoxFuture<'static, Result<SharedCatalog, StartupOutcomeError>>;
+
+#[derive(Default)]
+struct CatalogState {
+    current: Option<SharedCatalog>,
+    refreshing: Option<WeakShared<CatalogFetch>>,
+    next_generation: u64,
+}
+
+#[derive(Clone)]
+struct SharedCatalog {
+    snapshot: ToolCatalogSnapshot,
+    freshness: Option<CatalogFreshness>,
+    generation: u64,
 }
 
 /// One strong reference per active chat lease, independent of retained client bindings.
@@ -93,9 +134,15 @@ enum AcquisitionRole {
 impl Entry {
     fn remove_from_pool(self: &Arc<Self>) {
         if let Some(pool) = self.pool.upgrade() {
-            pool.lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .retain(|entry| !entry.ptr_eq(&Arc::downgrade(self)));
+            let mut entries = pool
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if entries
+                .get(self.key.as_ref())
+                .is_some_and(|entry| entry.ptr_eq(&Arc::downgrade(self)))
+            {
+                entries.remove(self.key.as_ref());
+            }
         }
     }
 
@@ -105,46 +152,128 @@ impl Entry {
         role: AcquisitionRole,
         cache_context: Option<&McpToolCatalogCacheContext>,
     ) -> Result<Arc<ClientToolCatalog>, StartupOutcomeError> {
-        // Listing must not update another chat's catalog or wait for its calls.
-        let listed = if role == AcquisitionRole::Creator {
-            client.tool_catalog.read(|snapshot| snapshot).await
-        } else {
-            let fetch_ticket = cache_context.map(|context| (context, context.begin_fetch()));
-            let (tools, meta) = list_tools_for_client_uncached(
-                &self.key.server_name,
-                self.key.server_name == crate::CODEX_APPS_MCP_SERVER_NAME,
-                "shared_connection",
-                &client.client,
-                Some(self.key.startup_timeout),
-                self.key.catalog_item_limit,
-                client.server_instructions.as_deref(),
-            )
-            .await?;
-            if let Some((context, mut ticket)) = fetch_ticket {
-                if context.track_tool_list_changes {
-                    ticket.tool_list_revision = Some(client.client.tool_list_revision());
-                }
-                context.publish_if_newest(ticket, &tools, meta.clone());
+        let initial = client.tool_catalog.read(|snapshot| snapshot).await;
+        let (fetch, owns_fetch) = {
+            let mut state = self
+                .catalog
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let current = state.current.get_or_insert(SharedCatalog {
+                snapshot: initial,
+                freshness: client.initial_catalog_freshness,
+                generation: 0,
+            });
+            if role == AcquisitionRole::Creator || current.is_fresh(client) {
+                return Ok(current.for_chat());
             }
-            ToolCatalogSnapshot {
-                revision: 0,
-                tools: tools.into(),
-                meta,
+            // Only an advertised public cache contract permits coalescing.
+            let cacheable = current.freshness.is_some();
+            if let Some(fetch) = cacheable
+                .then(|| state.refreshing.as_ref().and_then(WeakShared::upgrade))
+                .flatten()
+            {
+                (fetch, false)
+            } else {
+                let fetch = state.fetch(Arc::clone(&self.key), client.clone()).shared();
+                if cacheable {
+                    // A weak reference lets the last cancelled waiter cancel
+                    // the actual request, while other waiters keep it alive.
+                    state.refreshing = fetch.downgrade();
+                }
+                (fetch, true)
             }
         };
-        let mut catalog = self
+        let fetch_ticket = cache_context.map(|context| (context, context.begin_fetch()));
+        // Retain this handle through publication so new joiners cannot start
+        // another fetch between completion and publishing its cache deadline.
+        let mut listed = fetch.clone().await?;
+        if !owns_fetch && !listed.is_fresh(client) {
+            // The server revoked caching or its reply arrived after expiry.
+            // Each waiting chat now lists independently, without a serial gate.
+            let fetch = self
+                .catalog
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .fetch(Arc::clone(&self.key), client.clone());
+            listed = fetch.await?;
+        }
+        if let Some((context, mut ticket)) = fetch_ticket {
+            if context.track_tool_list_changes {
+                ticket.tool_list_revision = Some(client.client.tool_list_revision());
+            }
+            context.publish_if_newest(ticket, &listed.snapshot.tools, listed.snapshot.meta.clone());
+        }
+        let mut state = self
             .catalog
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let catalog = catalog.get_or_insert_with(|| listed.clone());
-        if catalog.tools != listed.tools || catalog.meta != listed.meta {
-            *catalog = listed;
+        let catalog = state.current.get_or_insert_with(|| listed.clone());
+        if catalog.snapshot.tools == listed.snapshot.tools
+            && catalog.snapshot.meta == listed.snapshot.meta
+        {
+            listed.snapshot = catalog.snapshot.clone();
         }
-        Ok(Arc::new(ClientToolCatalog::new(
-            Arc::clone(&catalog.tools),
-            catalog.meta.clone(),
-            /*updates*/ None,
-        )))
+        // A slower old request must not overwrite a newer catalog publication.
+        if listed.generation >= catalog.generation {
+            *catalog = listed.clone();
+        }
+        Ok(listed.for_chat())
+    }
+}
+
+impl SharedCatalog {
+    fn is_fresh(&self, client: &ManagedClient) -> bool {
+        self.freshness.is_some_and(|freshness| {
+            tokio::time::Instant::now() < freshness.expires_at
+                && client.client.tool_list_revision().current() == freshness.notification_revision
+        })
+    }
+
+    fn for_chat(&self) -> Arc<ClientToolCatalog> {
+        Arc::new(
+            ClientToolCatalog::new(
+                Arc::clone(&self.snapshot.tools),
+                self.snapshot.meta.clone(),
+                /*updates*/ None,
+            )
+            .with_notification_revision(
+                self.freshness
+                    .map_or(0, |freshness| freshness.notification_revision),
+            ),
+        )
+    }
+}
+
+impl CatalogState {
+    fn fetch(&mut self, key: Arc<ConnectionKey>, client: ManagedClient) -> CatalogFetch {
+        self.next_generation += 1;
+        let generation = self.next_generation;
+        async move {
+            let ToolCatalogListing {
+                tools,
+                meta,
+                freshness,
+            } = list_tools_for_client_uncached(
+                &key.server_name,
+                key.server_name == crate::CODEX_APPS_MCP_SERVER_NAME,
+                "shared_connection",
+                &client.client,
+                Some(key.startup_timeout),
+                key.catalog_item_limit,
+                client.server_instructions.as_deref(),
+            )
+            .await?;
+            Ok(SharedCatalog {
+                snapshot: ToolCatalogSnapshot {
+                    revision: 0,
+                    tools: tools.into(),
+                    meta,
+                },
+                freshness,
+                generation,
+            })
+        }
+        .boxed()
     }
 }
 
@@ -287,14 +416,12 @@ impl McpConnectionPool {
                     .entries
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                entries.retain(|entry| entry.strong_count() > 0);
                 let lease_cancellation = cancellation.child_token();
                 let existing = entries
-                    .iter()
-                    .filter_map(Weak::upgrade)
+                    .get(&key)
+                    .and_then(Weak::upgrade)
                     .filter(|entry| {
-                        entry.key == key
-                            && !entry.sharing_declined.is_cancelled()
+                        !entry.sharing_declined.is_cancelled()
                             && entry.client.peek().is_none_or(|result| {
                                 result.as_ref().is_ok_and(|client| {
                                     matches!(
@@ -304,7 +431,7 @@ impl McpConnectionPool {
                                 })
                             })
                     })
-                    .find_map(|entry| entry.owners.upgrade().map(|owner| (entry, owner)));
+                    .and_then(|entry| entry.owners.upgrade().map(|owner| (entry, owner)));
                 let (entry, owner, role) = if let Some((entry, owner)) = existing {
                     (entry, owner, AcquisitionRole::Joiner)
                 } else {
@@ -316,16 +443,16 @@ impl McpConnectionPool {
                     tokio::spawn(client.clone());
                     let owner = Arc::new(LeaseOwners);
                     let entry = Arc::new(Entry {
-                        key: key.clone(),
+                        key: Arc::new(key.clone()),
                         client,
                         capabilities: Arc::clone(&capabilities),
-                        catalog: Mutex::new(None),
+                        catalog: Mutex::default(),
                         cancellation: startup_cancellation,
                         sharing_declined,
                         owners: Arc::downgrade(&owner),
                         pool: Arc::downgrade(&self.entries),
                     });
-                    entries.push(Arc::downgrade(&entry));
+                    entries.insert(Arc::clone(&entry.key), Arc::downgrade(&entry));
                     (entry, owner, AcquisitionRole::Creator)
                 };
                 let lease = Arc::new(ConnectionLease {

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::ffi::OsString;
+use std::hash::Hash;
+use std::hash::Hasher;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -401,6 +403,54 @@ impl McpServerConnectionIdentity {
             }
         }
     }
+}
+
+// Hash stable, inexpensive discriminators; equality still checks every
+// credential, permission and transport input before a connection is shared.
+impl Hash for McpServerConnectionIdentity {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::mem::discriminant(&self.transport).hash(state);
+        match &self.transport {
+            McpServerTransportConfig::Stdio {
+                command,
+                args,
+                env,
+                cwd,
+                ..
+            } => {
+                command.hash(state);
+                args.hash(state);
+                cwd.hash(state);
+                hash_map_entries(env.as_ref(), state);
+            }
+            McpServerTransportConfig::StreamableHttp {
+                url,
+                bearer_token_env_var,
+                http_headers,
+                env_http_headers,
+                http_headers_helper,
+            } => {
+                url.hash(state);
+                bearer_token_env_var.hash(state);
+                http_headers_helper.hash(state);
+                hash_map_entries(http_headers.as_ref(), state);
+                hash_map_entries(env_http_headers.as_ref(), state);
+            }
+        }
+        self.environment_id.hash(state);
+        self.host_plugin_root.hash(state);
+        self.local_stdio_fallback_cwd.hash(state);
+        self.referenced_environment_variables.hash(state);
+        self.runtime_auth_token.hash(state);
+    }
+}
+
+fn hash_map_entries<H: Hasher>(map: Option<&HashMap<String, String>>, state: &mut H) {
+    let mut entries = map.map(|map| map.iter().collect::<Vec<_>>());
+    if let Some(entries) = &mut entries {
+        entries.sort_unstable_by_key(|(key, _)| *key);
+    }
+    entries.hash(state);
 }
 
 impl PartialEq for McpServerConnectionIdentity {

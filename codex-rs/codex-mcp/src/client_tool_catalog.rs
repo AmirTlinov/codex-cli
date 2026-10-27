@@ -111,6 +111,11 @@ impl ClientToolCatalog {
         }
     }
 
+    pub(crate) fn with_notification_revision(mut self, revision: u64) -> Self {
+        *self.listed_notification_revision.get_mut() = revision;
+        self
+    }
+
     pub(crate) async fn read<R>(&self, read: impl FnOnce(ToolCatalogSnapshot) -> R) -> R {
         let (_current, snapshot) = self.read_current().await;
         read(snapshot)

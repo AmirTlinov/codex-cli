@@ -819,6 +819,20 @@ impl From<anyhow::Error> for StartupOutcomeError {
     }
 }
 
+/// A server-advertised public listing, valid only until its deadline and revision.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CatalogFreshness {
+    pub(crate) expires_at: tokio::time::Instant,
+    pub(crate) notification_revision: u64,
+}
+
+#[derive(Debug)]
+pub(crate) struct ToolCatalogListing {
+    pub(crate) tools: Vec<ToolInfo>,
+    pub(crate) meta: Option<Arc<serde_json::Value>>,
+    pub(crate) freshness: Option<CatalogFreshness>,
+}
+
 #[instrument(level = "trace", skip_all, fields(server_name = %server_name))]
 pub(crate) async fn list_tools_for_client_uncached(
     server_name: &str,
@@ -828,17 +842,31 @@ pub(crate) async fn list_tools_for_client_uncached(
     timeout: Option<Duration>,
     catalog_item_limit: usize,
     server_instructions: Option<&str>,
-) -> Result<(Vec<ToolInfo>, Option<Arc<serde_json::Value>>)> {
+) -> Result<ToolCatalogListing> {
     let meta = StdMutex::new(None);
     let fetch_start = Instant::now();
+    let listed_at = tokio::time::Instant::now();
+    let revision = client.tool_list_revision().current();
+    let public_ttl_ms = StdMutex::new(u64::MAX);
     let tools = collect_paginated_with_limit("tools/list", timeout, catalog_item_limit, |params| {
         let client = Arc::clone(client);
         let meta = &meta;
+        let public_ttl_ms = &public_ttl_ms;
         let first_page = params.as_ref().is_none_or(|params| params.cursor.is_none());
         async move {
             let response = client
                 .list_tools_with_connector_ids(params, timeout)
                 .await?;
+            let ttl = if response.cache_scope == Some(rmcp::model::CacheScope::Public) {
+                response.ttl_ms.unwrap_or(0)
+            } else {
+                0
+            };
+            let mut public_ttl = public_ttl_ms
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *public_ttl = (*public_ttl).min(ttl);
+            drop(public_ttl);
             if first_page {
                 *meta
                     .lock()
@@ -875,7 +903,21 @@ pub(crate) async fn list_tools_for_client_uncached(
     let meta = meta
         .into_inner()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    Ok((tools, meta))
+    let ttl_ms = public_ttl_ms
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let freshness = (ttl_ms > 0 && client.tool_list_revision().current() == revision)
+        .then(|| listed_at.checked_add(Duration::from_millis(ttl_ms)))
+        .flatten()
+        .map(|expires_at| CatalogFreshness {
+            expires_at,
+            notification_revision: revision,
+        });
+    Ok(ToolCatalogListing {
+        tools,
+        meta,
+        freshness,
+    })
 }
 
 /// Filters disabled connectors, presents declared Codex Apps file parameters to the model as
@@ -1230,7 +1272,11 @@ async fn start_server_task(
     let fetch_ticket = codex_apps_tools_cache_context
         .as_ref()
         .map(|context| context.begin_fetch(ConnectorRuntimeFetchSource::Startup));
-    let (tools, meta) = list_tools_for_client_uncached(
+    let ToolCatalogListing {
+        tools,
+        meta,
+        freshness: initial_catalog_freshness,
+    } = list_tools_for_client_uncached(
         &server_name,
         is_codex_apps_mcp_server,
         /*codex_apps_refresh_trigger*/ "initial",
@@ -1277,6 +1323,7 @@ async fn start_server_task(
         );
     }
     let managed = ManagedClient {
+        initial_catalog_freshness,
         connection_sharing,
         shared_elicitation: None,
         _auth_change_notifications: auth_change_notifications,

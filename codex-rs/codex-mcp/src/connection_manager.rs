@@ -291,7 +291,10 @@ impl McpServerView {
                     self.catalog_item_limit,
                     client.server_instructions.as_deref(),
                 );
-                client.with_active_shared_lease(relist.boxed()).await?
+                client
+                    .with_active_shared_lease(relist.boxed())
+                    .await?
+                    .map(|listing| (listing.tools, listing.meta))
             })
             .await;
         if result.is_err() {

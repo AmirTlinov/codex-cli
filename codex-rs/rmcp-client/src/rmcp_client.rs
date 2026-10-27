@@ -399,6 +399,8 @@ pub struct ToolWithConnectorId {
 }
 
 pub struct ListToolsWithConnectorIdResult {
+    pub ttl_ms: Option<u64>,
+    pub cache_scope: Option<rmcp::model::CacheScope>,
     pub meta: Option<serde_json::Value>,
     pub next_cursor: Option<String>,
     pub tools: Vec<ToolWithConnectorId>,
@@ -800,6 +802,8 @@ impl RmcpClient {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(ListToolsWithConnectorIdResult {
+            ttl_ms: result.ttl_ms,
+            cache_scope: result.cache_scope,
             meta: result.meta.map(|meta| serde_json::json!(meta)),
             next_cursor: result.next_cursor,
             tools,

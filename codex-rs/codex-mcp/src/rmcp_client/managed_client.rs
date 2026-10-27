@@ -26,6 +26,7 @@ use tokio_util::task::AbortOnDropHandle;
 
 #[derive(Clone)]
 pub(crate) struct ManagedClient {
+    pub(crate) initial_catalog_freshness: Option<super::CatalogFreshness>,
     pub(crate) connection_sharing: ConnectionSharing,
     /// The calling chat's input handler, separate from the shared transport's startup handler.
     pub(crate) shared_elicitation: Option<Arc<SendElicitation>>,
