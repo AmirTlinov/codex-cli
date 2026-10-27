@@ -3,6 +3,8 @@ mod callbacks;
 mod globals;
 mod instance;
 mod module_loader;
+#[cfg(test)]
+mod scheduling_tests;
 mod timers;
 mod value;
 
@@ -22,6 +24,7 @@ use tokio::sync::mpsc;
 
 use self::instance::RuntimeInstance;
 use crate::TaskFailureHandler;
+use crate::executor::RuntimeExecutor;
 use crate::v8_init::runtime_executor;
 use tokio::sync::oneshot;
 
@@ -114,6 +117,7 @@ pub(crate) async fn spawn_runtime(
         let initialization_events = event_tx.clone();
         let caller_runtime = runtime_handle.clone();
         let Some(mut instance) = run_runtime_job(
+            executor,
             event_tx.clone(),
             task_failure_handler.clone(),
             &cancellation,
@@ -150,6 +154,7 @@ pub(crate) async fn spawn_runtime(
         while let Some(next_command) = command {
             let caller_runtime = runtime_handle.clone();
             let next = run_runtime_job(
+                executor,
                 event_tx.clone(),
                 task_failure_handler.clone(),
                 &cancellation,
@@ -170,10 +175,9 @@ pub(crate) async fn spawn_runtime(
         }
         // Teardown can run V8 cleanup. Keep it off the shared async coordinator.
         cancellation.cancel();
-        run_runtime_job(event_tx, task_failure_handler, &cancellation, move || {
-            drop(instance)
-        })
-        .await;
+        if executor.dispose(instance).await.is_err() {
+            report_runtime_failure(&event_tx, task_failure_handler.as_ref());
+        }
     }))?;
     let isolate_handle = isolate_handle_rx
         .await
@@ -186,21 +190,33 @@ pub(crate) async fn spawn_runtime(
 }
 
 async fn run_runtime_job<T: Send + 'static>(
+    executor: &RuntimeExecutor,
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
     task_failure_handler: Option<TaskFailureHandler>,
     cancellation: &CancellationToken,
     runtime: impl FnOnce() -> T + Send + 'static,
 ) -> Option<T> {
+    if cancellation.is_cancelled() {
+        if executor.dispose(runtime).await.is_err() {
+            report_runtime_failure(&event_tx, task_failure_handler.as_ref());
+        }
+        return None;
+    }
     // Retain ownership until a worker actually starts. Cancelling a queued
     // Tokio blocking task alone leaves its captures resident behind running JS.
     let queued = Arc::new(Mutex::new(Some(runtime)));
     let worker_job = Arc::clone(&queued);
+    let worker_cancellation = cancellation.clone();
     let mut task = tokio::task::spawn_blocking(move || {
         let job = worker_job
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
-        job.map(|job| job())
+        if worker_cancellation.is_cancelled() {
+            None
+        } else {
+            job.map(|job| job())
+        }
     });
     let result = tokio::select! {
         biased;
@@ -208,26 +224,31 @@ async fn run_runtime_job<T: Send + 'static>(
             let job = queued.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
             if job.is_some() {
                 task.abort();
-                // The coordinator was created after V8 initialization and may
-                // dispose a queued isolate without waiting for a busy worker.
-                drop(job);
-                return None;
+                executor.dispose(job).await.map(|()| None)
+            } else {
+                // A running isolate is interrupted through its IsolateHandle.
+                task.await
             }
-            // A running isolate is interrupted through its IsolateHandle.
-            task.await
         },
         result = &mut task => result,
     };
     match result {
         Ok(result) => result,
         Err(_) => {
-            if let Some(task_failure_handler) = task_failure_handler {
-                task_failure_handler("code-mode V8 runtime thread panicked".to_string());
-            }
-            let _ = event_tx.send(RuntimeEvent::ThreadPanicked);
+            report_runtime_failure(&event_tx, task_failure_handler.as_ref());
             None
         }
     }
+}
+
+fn report_runtime_failure(
+    event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
+    task_failure_handler: Option<&TaskFailureHandler>,
+) {
+    if let Some(task_failure_handler) = task_failure_handler {
+        task_failure_handler("code-mode V8 runtime thread panicked".to_string());
+    }
+    let _ = event_tx.send(RuntimeEvent::ThreadPanicked);
 }
 
 #[derive(Clone)]
@@ -348,7 +369,6 @@ mod tests {
     use super::RuntimeCommand;
     use super::RuntimeControlCommand;
     use super::RuntimeEvent;
-    use super::run_runtime_job;
     use super::spawn_runtime;
     use crate::FunctionCallOutputContentItem;
 
@@ -363,59 +383,6 @@ mod tests {
     }
 
     #[test]
-    fn cancelling_queued_work_releases_its_state_before_a_worker_is_available() {
-        use std::sync::Arc;
-        use std::sync::atomic::AtomicBool;
-        use std::sync::atomic::Ordering;
-
-        struct State(Arc<AtomicBool>);
-        impl Drop for State {
-            fn drop(&mut self) {
-                self.0.store(true, Ordering::Release);
-            }
-        }
-
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .max_blocking_threads(1)
-            .enable_time()
-            .build()
-            .expect("test runtime");
-        runtime.block_on(async {
-            let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
-            let blocker = tokio::task::spawn_blocking(move || {
-                started_tx.send(()).expect("started receiver");
-                let _ = release_rx.recv();
-            });
-            started_rx.await.expect("busy worker");
-            let released = Arc::new(AtomicBool::new(false));
-            let state = State(Arc::clone(&released));
-            let executed = Arc::new(AtomicBool::new(false));
-            let did_execute = Arc::clone(&executed);
-            let cancellation = CancellationToken::new();
-            let (events, _receiver) = mpsc::unbounded_channel();
-            let job = run_runtime_job(events, None, &cancellation, move || {
-                did_execute.store(true, Ordering::Release);
-                drop(state);
-            });
-            tokio::pin!(job);
-            assert!(futures::poll!(job.as_mut()).is_pending());
-            cancellation.cancel();
-            assert!(
-                tokio::time::timeout(Duration::from_secs(1), job)
-                    .await
-                    .expect("queued work cancellation")
-                    .is_none()
-            );
-            assert!(released.load(Ordering::Acquire));
-            assert!(!executed.load(Ordering::Acquire));
-            release_tx.send(()).expect("release worker");
-            blocker.await.expect("blocking worker");
-            assert!(!executed.load(Ordering::Acquire));
-        });
-    }
-
-    #[test]
     fn linked_v8_has_sandbox_enabled() {
         unsafe extern "C" {
             fn v8__V8__IsSandboxEnabled() -> bool;
@@ -426,49 +393,6 @@ mod tests {
             unsafe { v8__V8__IsSandboxEnabled() },
             "code mode must link against sandbox-enabled V8"
         );
-    }
-
-    #[tokio::test]
-    async fn runtime_thread_panic_before_initialization_is_reported_directly() {
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
-        drop(event_rx);
-        let (failure_tx, mut failure_rx) = mpsc::unbounded_channel();
-        run_runtime_job(
-            event_tx,
-            Some(std::sync::Arc::new(move |reason| {
-                let _ = failure_tx.send(reason);
-            })),
-            &CancellationToken::new(),
-            || panic!("runtime thread panic probe"),
-        )
-        .await;
-
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(1), failure_rx.recv())
-                .await
-                .expect("runtime failure timeout")
-                .expect("runtime failure"),
-            "code-mode V8 runtime thread panicked"
-        );
-    }
-
-    #[tokio::test]
-    async fn runtime_thread_panic_is_forwarded_without_owner_supervision() {
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-        run_runtime_job(
-            event_tx,
-            /*task_failure_handler*/ None,
-            &CancellationToken::new(),
-            || panic!("runtime thread panic probe"),
-        )
-        .await;
-
-        assert!(matches!(
-            tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
-                .await
-                .expect("runtime panic event timeout"),
-            Some(RuntimeEvent::ThreadPanicked)
-        ));
     }
 
     #[tokio::test]
