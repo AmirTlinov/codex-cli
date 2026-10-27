@@ -58,6 +58,15 @@ impl SessionHooks {
 }
 
 impl Session {
+    pub(crate) async fn hooks_for_interrupt(&self) -> Arc<Hooks> {
+        let shutting_down = self.state.lock().await.shutting_down;
+        if shutting_down {
+            self.services.hooks.snapshot()
+        } else {
+            self.hooks().await
+        }
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "hook discovery and publication must be serialized for this session"
