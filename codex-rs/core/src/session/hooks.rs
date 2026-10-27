@@ -188,7 +188,10 @@ mod tests {
         next.features
             .disable(codex_features::Feature::CodexHooks)
             .unwrap();
-        session.refresh_runtime_config(config, next).await;
+        assert_eq!(
+            session.refresh_runtime_config(config, next).await,
+            crate::ConfigRefreshOutcome::Published
+        );
         assert!(session.services.hooks.dirty.load(Ordering::Acquire));
 
         crate::hook_runtime::run_turn_interrupt_hooks(
