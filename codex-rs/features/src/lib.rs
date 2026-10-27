@@ -1649,7 +1649,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::McpConnectionSharing,
         key: "mcp_connection_sharing",
         stage: Stage::UnderDevelopment,
-        default_enabled: false,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::CodexAppsMcp20260728,
