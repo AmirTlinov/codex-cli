@@ -152,18 +152,23 @@ impl Entry {
         role: AcquisitionRole,
         cache_context: Option<&McpToolCatalogCacheContext>,
     ) -> Result<Arc<ClientToolCatalog>, StartupOutcomeError> {
-        let initial = client.tool_catalog.read(|snapshot| snapshot).await;
+        let initial = SharedCatalog {
+            snapshot: client.tool_catalog.read(|snapshot| snapshot).await,
+            freshness: client.initial_catalog_freshness,
+            generation: 0,
+        };
+        // Startup belongs to the creator. A faster joiner may already have
+        // published a private listing that cannot be reused by this caller.
+        if role == AcquisitionRole::Creator {
+            return Ok(initial.for_chat());
+        }
         let (fetch, owns_fetch) = {
             let mut state = self
                 .catalog
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let current = state.current.get_or_insert(SharedCatalog {
-                snapshot: initial,
-                freshness: client.initial_catalog_freshness,
-                generation: 0,
-            });
-            if role == AcquisitionRole::Creator || current.is_fresh(client) {
+            let current = state.current.get_or_insert(initial);
+            if current.is_fresh(client) {
                 return Ok(current.for_chat());
             }
             // Only an advertised public cache contract permits coalescing.
