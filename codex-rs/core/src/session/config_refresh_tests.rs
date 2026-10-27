@@ -129,8 +129,8 @@ async fn reload_user_config_layer_resolves_paths_without_resetting_runtime_setti
 }
 
 #[tokio::test]
-async fn hook_refresh_retries_current_plugin_policy_after_owner_replacement() -> anyhow::Result<()>
-{
+async fn hook_refresh_tracks_plugins_and_retries_current_policy_after_owner_replacement()
+-> anyhow::Result<()> {
     let (session, _) = make_session_and_context().await;
     let home = session.codex_home().await;
     let file = home.join(CONFIG_TOML_FILE);
@@ -166,7 +166,31 @@ async fn hook_refresh_retries_current_plugin_policy_after_owner_replacement() ->
             source: codex_hooks::SessionStartSource::Startup,
         },
     };
-    assert_eq!(session.hooks().preview_session_start(&request).len(), 1);
+    assert_eq!(
+        session.hooks().await.preview_session_start(&request).len(),
+        1
+    );
+
+    let store = codex_core_plugins::store::PluginStore::new(home.to_path_buf());
+    let plugin_id = codex_plugin::PluginId::parse("sample@test")?;
+    store.uninstall(&plugin_id)?;
+    session.services.plugins_manager.clear_cache();
+    assert!(
+        session
+            .hooks()
+            .await
+            .preview_session_start(&request)
+            .is_empty()
+    );
+    store.install(
+        AbsolutePathBuf::try_from(source.path().to_path_buf())?,
+        plugin_id,
+    )?;
+    session.services.plugins_manager.clear_cache();
+    assert_eq!(
+        session.hooks().await.preview_session_start(&request).len(),
+        1
+    );
 
     let mut incoming = initial.as_ref().clone();
     incoming.config_layer_stack = initial.config_layer_stack.with_user_config(
@@ -183,23 +207,41 @@ async fn hook_refresh_retries_current_plugin_policy_after_owner_replacement() ->
         .await
         .session_configuration
         .original_config_do_not_use = Arc::clone(&denied);
-    assert_eq!(session.hooks().preview_session_start(&request).len(), 1);
+    assert_eq!(
+        session.hooks().await.preview_session_start(&request).len(),
+        1
+    );
 
     session.disable_mcp_enterprise_auth().await;
 
     let published = session.get_config().await;
     assert!(!Arc::ptr_eq(&published, &denied));
     assert_eq!(published.plugins, denied.plugins);
-    assert_eq!(session.hooks().preview_session_start(&request).len(), 1);
+    assert_eq!(
+        session.hooks().await.preview_session_start(&request).len(),
+        1
+    );
 
     // Complete the pending deny rebuild after its owner was replaced.
     session.refresh_hooks(denied).await;
     assert!(Arc::ptr_eq(&session.get_config().await, &published));
-    assert!(session.hooks().preview_session_start(&request).is_empty());
+    assert!(
+        session
+            .hooks()
+            .await
+            .preview_session_start(&request)
+            .is_empty()
+    );
 
     // Finishing a hook rebuild from the previous allow policy must not restore it.
     session.refresh_hooks(initial).await;
-    assert!(session.hooks().preview_session_start(&request).is_empty());
+    assert!(
+        session
+            .hooks()
+            .await
+            .preview_session_start(&request)
+            .is_empty()
+    );
     Ok(())
 }
 

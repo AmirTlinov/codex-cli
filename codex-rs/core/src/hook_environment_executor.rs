@@ -31,7 +31,7 @@ use crate::unified_exec::exec_env_policy_from_shell_policy;
 
 const MAX_HOOK_OUTPUT_BYTES: usize = 1024 * 1024;
 
-pub(crate) fn with_environment_hooks(
+pub(crate) async fn with_environment_hooks(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
     environments: &TurnEnvironmentSnapshot,
@@ -42,15 +42,16 @@ pub(crate) fn with_environment_hooks(
         environments,
         /*target_environments*/ &[],
     )
+    .await
 }
 
-pub(crate) fn with_tool_environment_hooks(
+pub(crate) async fn with_tool_environment_hooks(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
     environments: &TurnEnvironmentSnapshot,
     target_environments: &[&str],
 ) -> Hooks {
-    session.hooks().with_environment_hooks(
+    session.hooks().await.with_environment_hooks(
         environment_hook_sources(environments, target_environments),
         Arc::new(EnvironmentCommandExecutor {
             environments: environments.clone(),

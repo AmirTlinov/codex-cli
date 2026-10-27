@@ -258,6 +258,7 @@ mod reasoning_effort;
 mod submission;
 pub(crate) use reasoning_effort::RequestEffortUsage;
 pub(crate) use submission::Submission;
+pub(crate) mod hooks;
 mod input_queue;
 mod mcp;
 mod mcp_prewarm;
@@ -2320,34 +2321,6 @@ impl Session {
     pub(crate) async fn provider(&self) -> ModelProviderInfo {
         let state = self.state.lock().await;
         state.session_configuration.provider.info().clone()
-    }
-
-    pub(crate) async fn refresh_hooks(&self, mut config: Arc<Config>) {
-        loop {
-            let disabled_plugin_ids = self.state.lock().await.active_disabled_plugin_ids.clone();
-            let environments = self.services.turn_environments.snapshot().await;
-            let hooks_config = build_hooks_config(
-                config.as_ref(),
-                self.services.plugins_manager.as_ref(),
-                environments.single_local_environment(),
-                &disabled_plugin_ids,
-            )
-            .await;
-
-            let state = self.state.lock().await;
-            if Arc::ptr_eq(
-                &state.session_configuration.original_config_do_not_use,
-                &config,
-            ) && state.active_disabled_plugin_ids == disabled_plugin_ids
-            {
-                let hooks = self.hooks().reconfigured(hooks_config);
-                self.services.hooks.store(Arc::new(hooks));
-                return;
-            }
-            // Unrelated updates can replace the owner too. Rebuild current inputs
-            // so they cannot strand a pending plugin-policy refresh.
-            config = Arc::clone(&state.session_configuration.original_config_do_not_use);
-        }
     }
 
     fn emit_config_changed_contributors(
@@ -5562,10 +5535,6 @@ impl Session {
         if !had_active_turn {
             self.cancel_mcp_startup();
         }
-    }
-
-    pub(crate) fn hooks(&self) -> Arc<Hooks> {
-        self.services.hooks.load_full()
     }
 
     pub(crate) fn user_shell(&self) -> Arc<shell::Shell> {

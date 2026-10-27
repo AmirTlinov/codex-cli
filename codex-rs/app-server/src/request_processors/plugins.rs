@@ -528,7 +528,6 @@ impl PluginRequestProcessor {
     async fn on_effective_plugins_changed(&self) {
         self.clear_plugin_related_caches();
         self.thread_manager.invalidate_mcp_runtimes().await;
-        self.thread_manager.refresh_hook_runtimes().await;
     }
 
     fn clear_plugin_related_caches(&self) {
@@ -1554,7 +1553,6 @@ impl PluginRequestProcessor {
         self.clear_plugin_related_caches();
         reload_user_config(&self.config_manager, &self.thread_manager).await;
         self.thread_manager.invalidate_mcp_runtimes().await;
-        self.thread_manager.refresh_hook_runtimes().await;
 
         let plugin_mcp_servers = load_configured_plugin_mcp_servers(
             result.installed_path.as_path(),
