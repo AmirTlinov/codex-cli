@@ -39,9 +39,16 @@ impl SessionHooks {
         !self.dirty.load(Ordering::Acquire) && self.generation.load(Ordering::Acquire) == generation
     }
 
-    pub(crate) async fn shutdown(&self) {
+    /// Cancellation and teardown use admitted declarations without starting discovery.
+    pub(crate) fn snapshot(&self) -> Arc<Hooks> {
+        self.current.load_full()
+    }
+
+    pub(crate) async fn shutdown(&self) -> Arc<Hooks> {
         // Teardown drains admitted work without starting discovery again.
-        self.current.load_full().shutdown().await;
+        let hooks = self.snapshot();
+        hooks.shutdown().await;
+        hooks
     }
 
     #[cfg(test)]
@@ -126,6 +133,40 @@ impl Session {
 mod tests {
     use super::*;
     use crate::session::tests::make_session_and_context;
+    use futures::FutureExt;
+
+    #[tokio::test]
+    async fn teardown_uses_captured_hooks_without_waiting_for_refresh() {
+        let (session, turn_context) = make_session_and_context().await;
+        let session = Arc::new(session);
+        let previous = session.services.hooks.shutdown().await;
+        session.services.plugins_manager.clear_cache();
+        let _refresh = session.services.hooks.refresh.try_lock().unwrap();
+
+        assert!(
+            crate::hook_runtime::run_session_end_hooks(&session, Arc::clone(&previous))
+                .now_or_never()
+                .is_some()
+        );
+        assert!(
+            crate::hook_runtime::run_turn_interrupt_hooks(
+                &session,
+                &Arc::new(turn_context),
+                &Mutex::new(crate::state::TurnState::default()),
+            )
+            .now_or_never()
+            .is_some()
+        );
+        assert!(Arc::ptr_eq(&previous, &session.services.hooks.snapshot()));
+        assert!(
+            !session.services.hooks.is_current(
+                session
+                    .services
+                    .plugins_manager
+                    .loaded_plugins_cache_generation()
+            )
+        );
+    }
 
     #[tokio::test]
     async fn plugin_invalidation_is_lazy_and_concurrent_admissions_share_the_refresh() {

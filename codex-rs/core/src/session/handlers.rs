@@ -308,7 +308,7 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
         shell_snapshot_prewarm.abort();
         let _ = shell_snapshot_prewarm.await;
     }
-    sess.services.hooks.shutdown().await;
+    let shutdown_hooks = sess.services.hooks.shutdown().await;
     sess.async_hook_results.close();
     while sess.async_hook_results.try_recv().is_ok() {}
     sess.services
@@ -335,7 +335,7 @@ pub(super) async fn shutdown_session_runtime(sess: &Arc<Session>) {
 
     sess.drain_code_mode_messages().await;
 
-    crate::hook_runtime::run_session_end_hooks(sess).await;
+    crate::hook_runtime::run_session_end_hooks(sess, shutdown_hooks).await;
     emit_thread_stop_lifecycle(sess).await;
 }
 
