@@ -174,10 +174,7 @@ impl MarkdownStyles {
                 "markup.list.unnumbered.markdown",
                 "markup.list.bullet.markdown",
             ]),
-            link: Style::new()
-                .fg(accent_color())
-                .patch(foreground(&["markup.underline.link.markdown"]))
-                .underlined(),
+            link: Style::new().underlined(),
             blockquote: Style::new()
                 .green()
                 .patch(foreground(&["markup.quote.markdown"])),
