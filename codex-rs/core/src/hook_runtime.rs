@@ -516,12 +516,7 @@ pub(crate) async fn run_turn_interrupt_hooks(
         .map(|step| step.executor_hook_sources.clone())
         .unwrap_or_default();
     let has_executor_hooks = !executor_hook_sources.is_empty();
-    let shutting_down = sess.state.lock().await.shutting_down;
-    let captured_hooks = if shutting_down {
-        sess.services.hooks.snapshot()
-    } else {
-        sess.hooks().await
-    };
+    let captured_hooks = sess.hooks_for_interrupt().await;
     let hooks = match last_known_step_context.as_deref() {
         Some(step) => with_captured_environment_hooks(
             &captured_hooks,
