@@ -30,8 +30,11 @@ fn image_paths_round_trip_spaces_unicode_and_reserved_characters() -> anyhow::Re
         expected.to_string(),
     ] {
         assert_eq!(
-            links.resolve(&destination),
-            Some(expected.clone()),
+            links
+                .resolve(&destination)
+                .as_ref()
+                .map(ValidatedImage::url),
+            Some(&expected),
             "{destination}"
         );
     }
@@ -100,7 +103,7 @@ fn image_symlinks_cannot_bypass_path_validation() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
     for (name, target) in [
         ("newline.png", "line\nbreak.png"),
-        ("colon.png", "file:stream.png"),
+        ("tab.png", "file\tname.png"),
     ] {
         let target = image_in(directory.path(), target)?;
         std::os::unix::fs::symlink(target, directory.path().join(name))?;
@@ -214,12 +217,74 @@ fn streamed_image_links_keep_destinations_through_completion() -> anyhow::Result
 fn deleted_image_reports_an_error_without_launching() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
     let path = image_in(directory.path(), "image.png")?;
-    let url = LocalImageLinks::new(directory.path())
+    let image = LocalImageLinks::new(directory.path())
         .resolve("image.png")
         .unwrap();
     std::fs::remove_file(path)?;
-    assert!(open_link(url.as_str()).is_err());
+    assert!(open_link(image.url().as_str()).is_err());
     Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn unix_image_paths_allow_colons_and_keep_literal_percent_escapes() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let name = "reports:2026/frame 12:30%20.png";
+    let path = image_in(directory.path(), name)?;
+    let symlink = directory.path().join("latest.png");
+    std::os::unix::fs::symlink(&path, &symlink)?;
+    let expected = Url::from_file_path(&path).unwrap();
+    for candidate in [&path, &symlink] {
+        assert_eq!(
+            ValidatedImage::from_path(candidate).unwrap().url(),
+            &expected
+        );
+    }
+    let links = LocalImageLinks::new(directory.path());
+    for target in [
+        format!("./{}", urlencoding::encode(name)),
+        expected.to_string(),
+        "latest.png".to_owned(),
+    ] {
+        assert_eq!(links.resolve(&target).unwrap().url(), &expected, "{target}");
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_image_paths_reject_alternate_data_streams() {
+    assert!(is_supported_image_path(Path::new(r"C:\images\frame.png")));
+    assert!(is_supported_image_path(Path::new(
+        r"\\?\C:\images\frame.png"
+    )));
+    assert!(!is_supported_image_path(Path::new(
+        r"\\server\share\frame.png"
+    )));
+    assert!(!is_supported_image_path(Path::new(
+        r"\\?\UNC\server\share\frame.png"
+    )));
+    assert!(!is_supported_image_path(Path::new(
+        r"C:\images\frame.png:stream.png"
+    )));
+    assert!(!is_supported_image_path(Path::new(
+        r"C:\images:stream\frame.png"
+    )));
+}
+
+#[cfg(unix)]
+#[test]
+fn image_opener_exit_status_is_returned_to_the_caller() {
+    assert!(run_image_opener(std::process::Command::new("sh").args(["-c", "exit 0"])).is_ok());
+    let error = run_image_opener(std::process::Command::new("sh").args(["-c", "exit 3"]))
+        .expect_err("an unsuccessful desktop helper must report failure");
+    assert!(error.to_string().contains("3"));
+    assert!(
+        run_image_opener(&mut std::process::Command::new(
+            "/nonexistent/codex-image-opener"
+        ))
+        .is_err()
+    );
 }
 
 #[test]

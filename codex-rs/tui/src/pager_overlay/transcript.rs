@@ -24,6 +24,10 @@ pub(crate) struct TranscriptOverlay {
     content_area: Rect,
     cursor: Option<(u16, u16)>,
     notice: Option<String>,
+    link_errors: (
+        std::sync::mpsc::Sender<String>,
+        std::sync::mpsc::Receiver<String>,
+    ),
     pub(crate) key_chord_hint: Option<Vec<(String, String)>>,
     pub(crate) browsing_footer: Option<Line<'static>>,
     find_transcript: Vec<crate::key_hint::KeyBinding>,
@@ -65,6 +69,7 @@ impl TranscriptOverlay {
             content_area: Rect::default(),
             cursor: None,
             notice: None,
+            link_errors: std::sync::mpsc::channel(),
             key_chord_hint: None,
             browsing_footer: None,
             find_transcript: Vec::new(),
@@ -76,6 +81,9 @@ impl TranscriptOverlay {
     }
 
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
+        if let Some(error) = self.link_errors.1.try_iter().last() {
+            self.notice = Some(error);
+        }
         Clear.render(area, buf);
         let browsing = self.browsing_footer.is_some()
             && !self.pending_select_mode
@@ -116,7 +124,9 @@ impl TranscriptOverlay {
         .intersection(area);
         self.cursor = None;
         if browsing && let Some(footer) = &self.browsing_footer {
-            if let Some(items) = &self.key_chord_hint {
+            if let Some(notice) = &self.notice {
+                Line::from(notice.as_str()).dim().render(status, buf);
+            } else if let Some(items) = &self.key_chord_hint {
                 crate::bottom_pane::footer_hint_items_line(items).render(status, buf);
             } else {
                 Widget::render(footer, status, buf);
@@ -549,10 +559,17 @@ impl TranscriptOverlay {
                 Ok(status) => status.message("selection"),
                 Err(error) => error,
             });
-        } else if let ViewAction::OpenLink(url) = action
-            && let Err(error) = crate::local_image_links::open_link(&url)
-        {
-            self.notice = Some(format!("Could not open link: {error}"));
+        } else if let ViewAction::OpenLink(url) = action {
+            let errors = self.link_errors.0.clone();
+            let frames = tui.frame_requester();
+            let result = crate::local_image_links::open_link_in_background(url, move |error| {
+                if errors.send(error).is_ok() {
+                    frames.schedule_frame();
+                }
+            });
+            if let Err(error) = result {
+                self.notice = Some(format!("Could not start link opener: {error}"));
+            }
         }
     }
 

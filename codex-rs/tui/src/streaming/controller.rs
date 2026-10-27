@@ -181,7 +181,6 @@ impl StreamCore {
     }
 
     fn refresh_preview(&mut self) -> bool {
-        self.preview.local_image_links = self.render.local_image_links.clone();
         let pending = self.state.collector.pending_source();
         let prose_preview = self.holdback_scanner.allows_prose_preview();
         let math = self.render_mode == HistoryRenderMode::Rich
@@ -198,6 +197,7 @@ impl StreamCore {
                     PreviewMode::Prose(self.render_mode)
                 },
                 self.inline_visualization_context.as_ref(),
+                self.render.local_image_links.as_deref(),
             )
         } else {
             self.preview = ProsePreview::default();

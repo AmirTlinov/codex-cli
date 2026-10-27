@@ -172,8 +172,8 @@ impl ViewImageHistoryCell {
     pub(crate) fn with_local_image_link(mut self) -> Self {
         self.image_link = self
             .image_path()
-            .and_then(|path| crate::local_image_links::resolve_image_path(path.as_path()))
-            .map(|url| TerminalHyperlink::local_image(&url));
+            .and_then(|path| crate::local_image_links::ValidatedImage::from_path(path.as_path()))
+            .map(|image| TerminalHyperlink::local_image(&image));
         self
     }
 

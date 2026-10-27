@@ -32,6 +32,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use url::Url;
 
 use crate::line_truncation::line_width;
+use crate::local_image_links::ValidatedImage;
 use crate::render::line_utils::line_to_borrowed;
 use crate::render::line_utils::line_to_static;
 use crate::width::display_width;
@@ -105,10 +106,10 @@ impl TerminalHyperlink {
         }
     }
 
-    pub(crate) fn local_image(destination: &Url) -> Self {
+    pub(crate) fn local_image(image: &ValidatedImage) -> Self {
         Self {
             columns: 0..0,
-            destination: destination.to_string(),
+            destination: image.url().to_string(),
             destination_kind: DestinationKind::TrustedFile,
         }
     }

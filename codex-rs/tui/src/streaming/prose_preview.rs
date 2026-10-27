@@ -14,7 +14,6 @@ use ratatui::text::Line;
 use std::collections::VecDeque;
 use std::ops::Range;
 use std::path::Path;
-use std::sync::Arc;
 
 const MAX_PREVIEW_BYTES: usize = 8192;
 
@@ -26,7 +25,6 @@ pub(super) enum PreviewMode {
 /// Tracks one append-only incomplete line; reset when a newline is committed.
 #[derive(Default)]
 pub(super) struct ProsePreview {
-    pub(super) local_image_links: Option<Arc<LocalImageLinks>>,
     pub(super) lines: Vec<HyperlinkLine>,
     scanned_len: usize,
     safe_len: usize,
@@ -43,6 +41,7 @@ impl ProsePreview {
         cwd: &Path,
         mode: PreviewMode,
         inline_visualization_context: Option<&InlineVisualizationContext>,
+        local_image_links: Option<&LocalImageLinks>,
     ) -> bool {
         // Only scan newly arrived bytes, including on very long single-line responses.
         self.has_pipe |= source[self.scanned_len..].contains('|');
@@ -112,7 +111,7 @@ impl ProsePreview {
                 render_mode,
                 inline_visualization_context,
                 crate::markdown_render::ListSpacing::AfterMultiline,
-                self.local_image_links.as_deref(),
+                local_image_links,
             ),
             PreviewMode::Math => textwrap::wrap(&source[start..], width.unwrap_or(usize::MAX))
                 .into_iter()

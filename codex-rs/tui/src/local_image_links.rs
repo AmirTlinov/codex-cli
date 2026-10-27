@@ -24,7 +24,7 @@ pub(crate) fn enabled_for_session(
 #[derive(Debug)]
 pub(crate) struct LocalImageLinks {
     cwd: PathBuf,
-    destinations: Mutex<HashMap<String, Option<Url>>>,
+    destinations: Mutex<HashMap<String, Option<ValidatedImage>>>,
 }
 
 impl LocalImageLinks {
@@ -36,19 +36,61 @@ impl LocalImageLinks {
         }
     }
 
-    pub(crate) fn resolve(&self, destination: &str) -> Option<Url> {
+    pub(crate) fn resolve(&self, destination: &str) -> Option<ValidatedImage> {
         self.destinations
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .entry(destination.to_owned())
-            .or_insert_with(|| resolve_image(&self.cwd, destination))
+            .or_insert_with(|| {
+                let path = parse_markdown_target(&self.cwd, destination)?;
+                ValidatedImage::from_path(&path)
+            })
             .clone()
     }
 }
 
-/// Tool paths are literal filenames, so percent signs must not be decoded as Markdown escapes.
-pub(crate) fn resolve_image_path(path: &Path) -> Option<Url> {
-    resolve_image(Path::new(""), Url::from_file_path(path).ok()?.as_str())
+/// An existing local raster image with a canonical, validated file URL.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ValidatedImage(Url);
+
+impl ValidatedImage {
+    /// Paths are literal filenames; only Markdown targets decode URL escapes.
+    pub(crate) fn from_path(path: &Path) -> Option<Self> {
+        if !path.is_absolute() || !is_supported_image_path(path) {
+            return None;
+        }
+        // Validate the resolved path too: symlinks can change the type or point to a network share.
+        let path = path.canonicalize().ok()?;
+        let url = Url::from_file_path(&path).ok()?;
+        if url.host_str().is_some() || !is_supported_image_path(&path) || !path.is_file() {
+            return None;
+        }
+        // Desktop openers may use content-based MIME detection instead of the extension.
+        let mut header = Vec::new();
+        std::fs::File::open(&path)
+            .ok()?
+            .take(/*limit*/ 32)
+            .read_to_end(&mut header)
+            .ok()?;
+        if !matches!(
+            image::guess_format(&header).ok()?,
+            image::ImageFormat::Png
+                | image::ImageFormat::Jpeg
+                | image::ImageFormat::Gif
+                | image::ImageFormat::WebP
+                | image::ImageFormat::Bmp
+                | image::ImageFormat::Tiff
+                | image::ImageFormat::Avif
+                | image::ImageFormat::Ico
+        ) {
+            return None;
+        }
+        Some(Self(url))
+    }
+
+    pub(crate) fn url(&self) -> &Url {
+        &self.0
+    }
 }
 
 fn is_image(path: &Path) -> bool {
@@ -64,22 +106,35 @@ fn is_image(path: &Path) -> bool {
 
 fn is_supported_image_path(path: &Path) -> bool {
     is_image(path)
-        && path.to_str().is_some_and(|text| !text.chars().any(char::is_control))
-        && !path.components().any(|component| {
-            matches!(component, std::path::Component::Normal(name) if name.to_string_lossy().contains(':'))
+        && path
+            .to_str()
+            .is_some_and(|text| !text.starts_with("//") && !text.chars().any(char::is_control))
+        && path.components().all(|component| match component {
+            std::path::Component::Prefix(prefix) => matches!(
+                prefix.kind(),
+                std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_)
+            ),
+            std::path::Component::Normal(name) => {
+                !cfg!(windows) || !name.to_string_lossy().contains(':')
+            }
+            _ => true,
         })
 }
 
-fn resolve_image(cwd: &Path, destination: &str) -> Option<Url> {
+fn is_local_file_url(url: &Url) -> bool {
+    url.scheme() == "file"
+        && url.host_str().is_none_or(|host| host == "localhost")
+        && url.query().is_none()
+        && url.fragment().is_none()
+}
+
+fn parse_markdown_target(cwd: &Path, destination: &str) -> Option<PathBuf> {
     if destination.len() > 8 * 1024 || destination.chars().any(char::is_control) {
         return None;
     }
     let path = if destination.starts_with("file:") {
         let url = Url::parse(destination).ok()?;
-        if url.host_str().is_some_and(|host| host != "localhost")
-            || url.query().is_some()
-            || url.fragment().is_some()
-        {
+        if !is_local_file_url(&url) {
             return None;
         }
         url.to_file_path().ok()?
@@ -92,45 +147,43 @@ fn resolve_image(cwd: &Path, destination: &str) -> Option<Url> {
         path.to_owned()
     };
     let text = path.to_str()?;
-    if text.starts_with(['~', '\\']) || text.starts_with("//") || !is_supported_image_path(&path) {
+    if text.starts_with('~')
+        || text.starts_with("//")
+        || text.starts_with('\\') && !path.is_absolute()
+    {
         return None;
     }
-    // Validate the resolved path too: symlinks can change the file type or point to a network share.
-    let path = cwd.join(path).canonicalize().ok()?;
-    let url = Url::from_file_path(&path).ok()?;
-    if url.host_str().is_some() || !is_supported_image_path(&path) || !path.is_file() {
-        return None;
-    }
-    // Desktop openers may use content-based MIME detection instead of the filename extension.
-    let mut header = Vec::new();
-    std::fs::File::open(&path)
-        .ok()?
-        .take(/*limit*/ 32)
-        .read_to_end(&mut header)
-        .ok()?;
-    if !matches!(
-        image::guess_format(&header).ok()?,
-        image::ImageFormat::Png
-            | image::ImageFormat::Jpeg
-            | image::ImageFormat::Gif
-            | image::ImageFormat::WebP
-            | image::ImageFormat::Bmp
-            | image::ImageFormat::Tiff
-            | image::ImageFormat::Avif
-            | image::ImageFormat::Ico
-    ) {
-        return None;
-    }
-    Some(url)
+    Some(cwd.join(path))
+}
+
+/// Deliver opener failures to the owning surface without blocking terminal input.
+pub(crate) fn open_link_in_background(
+    destination: String,
+    on_error: impl FnOnce(String) + Send + 'static,
+) -> std::io::Result<()> {
+    // Some desktop helpers wait for the viewer to close. A detached thread also keeps that
+    // wait out of Tokio runtime shutdown when the user exits the CLI first.
+    std::thread::Builder::new()
+        .name("codex-link-opener".into())
+        .spawn(move || {
+            if let Err(error) = open_link(&destination) {
+                on_error(format!("Could not open link: {error}"));
+            }
+        })
+        .map(drop)
 }
 
 /// Image links use the associated viewer; web links and generated HTML retain browser behavior.
-pub(crate) fn open_link(destination: &str) -> std::io::Result<()> {
+fn open_link(destination: &str) -> std::io::Result<()> {
     let url = Url::parse(destination).map_err(std::io::Error::other)?;
-    if url.scheme() == "file" && url.to_file_path().ok().is_some_and(|path| is_image(&path)) {
-        let image = resolve_image(Path::new(""), destination)
+    if let Ok(path) = url.to_file_path()
+        && is_image(&path)
+    {
+        let image = is_local_file_url(&url)
+            .then(|| ValidatedImage::from_path(&path))
+            .flatten()
             .ok_or_else(|| std::io::Error::other("image is no longer available"))?;
-        open_image(&image)
+        open_image(image.url())
     } else {
         webbrowser::open(destination)
     }
@@ -184,18 +237,23 @@ fn open_image(url: &Url) -> std::io::Result<()> {
 #[cfg(not(any(target_os = "macos", windows)))]
 fn open_image(url: &Url) -> std::io::Result<()> {
     // A complete URI is one argument, including spaces and non-ASCII filenames.
-    let mut child = std::process::Command::new("xdg-open")
-        .arg(url.as_str())
+    run_image_opener(std::process::Command::new("xdg-open").arg(url.as_str()))
+}
+
+#[cfg(any(all(test, unix), not(any(target_os = "macos", windows))))]
+fn run_image_opener(command: &mut std::process::Command) -> std::io::Result<()> {
+    let status = command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .spawn()?;
-    std::thread::spawn(move || match child.wait() {
-        Ok(status) if status.success() => {}
-        Ok(status) => tracing::warn!(%status, "image opener failed"),
-        Err(error) => tracing::warn!(%error, "could not reap image opener"),
-    });
-    Ok(())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "image viewer exited with {status}"
+        )))
+    }
 }
 
 #[cfg(test)]
