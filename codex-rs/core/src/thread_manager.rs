@@ -501,6 +501,21 @@ pub fn thread_store_from_config(
     config: &Config,
     state_db: Option<StateDbHandle>,
 ) -> Arc<dyn ThreadStore> {
+    if config.features.enabled(Feature::ShellSnapshot)
+        && let Ok(runtime) = tokio::runtime::Handle::try_current()
+    {
+        let codex_home = config.codex_home.clone();
+        let state_db = state_db.clone();
+        let started_at = std::time::SystemTime::now();
+        runtime.spawn(async move {
+            if let Err(error) =
+                crate::shell_snapshot::cleanup_stale_snapshots(&codex_home, started_at, state_db)
+                    .await
+            {
+                warn!("failed to clean up shell snapshots: {error:#}");
+            }
+        });
+    }
     match &config.experimental_thread_store {
         ThreadStoreConfig::Local => {
             let compression_enabled = config

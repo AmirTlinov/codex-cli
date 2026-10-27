@@ -340,7 +340,6 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
             codex_home: dir.path().abs(),
             session_id,
             session_telemetry: session_telemetry.clone(),
-            state_db: None,
             credential_broker: Some(receiver),
             prefer_executor_snapshots,
         });
@@ -371,7 +370,6 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
         dir.path().abs(),
         session_id,
         session_telemetry,
-        /*state_db*/ None,
         Some(sender),
         /*prefer_executor_snapshots*/ false,
     );
@@ -1692,7 +1690,6 @@ async fn try_create_creates_and_deletes_snapshot_file() -> Result<()> {
         &dir.path().abs(),
         &ShellEnvironmentPolicy::default(),
         &shell,
-        /*state_db*/ None,
         /*credential_broker*/ None,
         /*sandbox*/ None,
     )
@@ -1724,7 +1721,6 @@ async fn try_create_uses_distinct_generation_paths() -> Result<()> {
         &dir.path().abs(),
         &ShellEnvironmentPolicy::default(),
         &shell,
-        /*state_db*/ None,
         /*credential_broker*/ None,
         /*sandbox*/ None,
     )
@@ -1736,7 +1732,6 @@ async fn try_create_uses_distinct_generation_paths() -> Result<()> {
         &dir.path().abs(),
         &ShellEnvironmentPolicy::default(),
         &shell,
-        /*state_db*/ None,
         /*credential_broker*/ None,
         /*sandbox*/ None,
     )
@@ -1944,7 +1939,7 @@ async fn cleanup_stale_snapshots_removes_orphans_and_keeps_live() -> Result<()> 
     fs::write(&orphan_snapshot, "orphan").await?;
     fs::write(&invalid_snapshot, "invalid").await?;
 
-    cleanup_stale_snapshots(&codex_home, ThreadId::new(), /*state_db*/ None).await?;
+    cleanup_stale_snapshots(&codex_home, SystemTime::now(), /*state_db*/ None).await?;
 
     assert_eq!(live_snapshot.exists(), true);
     assert_eq!(orphan_snapshot.exists(), false);
@@ -1967,7 +1962,7 @@ async fn cleanup_stale_snapshots_removes_stale_rollouts() -> Result<()> {
 
     set_file_mtime(&rollout_path, SNAPSHOT_RETENTION + Duration::from_secs(60))?;
 
-    cleanup_stale_snapshots(&codex_home, ThreadId::new(), /*state_db*/ None).await?;
+    cleanup_stale_snapshots(&codex_home, SystemTime::now(), /*state_db*/ None).await?;
 
     assert_eq!(stale_snapshot.exists(), false);
     Ok(())
@@ -1975,7 +1970,7 @@ async fn cleanup_stale_snapshots_removes_stale_rollouts() -> Result<()> {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn cleanup_stale_snapshots_skips_active_session() -> Result<()> {
+async fn cleanup_stale_snapshots_skips_files_created_after_startup() -> Result<()> {
     let dir = tempdir()?;
     let codex_home = dir.path().abs();
     let snapshot_dir = codex_home.join(SNAPSHOT_DIR);
@@ -1988,9 +1983,34 @@ async fn cleanup_stale_snapshots_skips_active_session() -> Result<()> {
 
     set_file_mtime(&rollout_path, SNAPSHOT_RETENTION + Duration::from_secs(60))?;
 
-    cleanup_stale_snapshots(&codex_home, active_session, /*state_db*/ None).await?;
+    cleanup_stale_snapshots(&codex_home, SystemTime::UNIX_EPOCH, /*state_db*/ None).await?;
 
     assert_eq!(active_snapshot.exists(), true);
+    Ok(())
+}
+
+#[tokio::test]
+async fn cleanup_preserves_new_generations_with_rounded_mtimes() -> Result<()> {
+    let dir = tempdir()?;
+    let codex_home = dir.path().abs();
+    let snapshots = codex_home.join(SNAPSHOT_DIR);
+    fs::create_dir_all(&snapshots).await?;
+    let cutoff = Duration::from_secs(1_000) + Duration::from_millis(500);
+    let generation = (cutoff + Duration::from_millis(100)).as_nanos();
+    for suffix in [
+        format!(".{generation}.sh"),
+        format!(".{generation}.ps1"),
+        format!(".tmp-{generation}"),
+    ] {
+        let path = snapshots.join(format!("{}{suffix}", ThreadId::new()));
+        let file = std::fs::File::create(&path)?;
+        file.set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_000))?;
+        cleanup_stale_snapshots(&codex_home, SystemTime::UNIX_EPOCH + cutoff, None).await?;
+        assert!(
+            path.exists(),
+            "new snapshot with rounded mtime must survive: {suffix}"
+        );
+    }
     Ok(())
 }
 

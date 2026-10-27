@@ -267,7 +267,6 @@ async fn credential_refresh_does_not_restore_a_removed_environment() {
         cwd,
         session_id,
         telemetry,
-        /*state_db*/ None,
         Some(broker),
         /*prefer_executor_snapshots*/ false,
     );

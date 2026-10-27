@@ -1499,7 +1499,6 @@ impl Session {
                     config.codex_home.clone(),
                     thread_id,
                     session_telemetry.clone(),
-                    state_db_ctx.clone(),
                     snapshot_credential_broker,
                     prefer_executor_shell_snapshots,
                 )
