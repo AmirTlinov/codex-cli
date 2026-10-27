@@ -1,5 +1,7 @@
 use std::sync::OnceLock;
 
+use crate::executor::RuntimeExecutor;
+
 /// Controls whether V8 may generate executable code at runtime.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum V8JitMode {
@@ -11,6 +13,7 @@ pub enum V8JitMode {
 struct V8Initialization {
     _platform: v8::SharedRef<v8::Platform>,
     jit_mode: V8JitMode,
+    executor: RuntimeExecutor,
 }
 
 static V8_INITIALIZATION: OnceLock<Result<V8Initialization, String>> = OnceLock::new();
@@ -32,9 +35,17 @@ pub fn initialize_v8(jit_mode: V8JitMode) -> Result<(), String> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn ensure_v8_initialized() -> Result<(), String> {
     match V8_INITIALIZATION.get_or_init(|| initialize_v8_with_mode(V8JitMode::Enabled)) {
         Ok(_) => Ok(()),
+        Err(error_text) => Err(error_text.clone()),
+    }
+}
+
+pub(crate) fn runtime_executor() -> Result<&'static RuntimeExecutor, String> {
+    match V8_INITIALIZATION.get_or_init(|| initialize_v8_with_mode(V8JitMode::Enabled)) {
+        Ok(initialization) => Ok(&initialization.executor),
         Err(error_text) => Err(error_text.clone()),
     }
 }
@@ -54,9 +65,11 @@ fn initialize_v8_with_mode(jit_mode: V8JitMode) -> Result<V8Initialization, Stri
     let platform = v8::new_default_platform(0, false).make_shared();
     v8::V8::initialize_platform(platform.clone());
     v8::V8::initialize();
+    let executor = RuntimeExecutor::new()?;
     Ok(V8Initialization {
         _platform: platform,
         jit_mode,
+        executor,
     })
 }
 

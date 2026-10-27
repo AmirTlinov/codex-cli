@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
@@ -52,7 +51,7 @@ impl CellHost for PanickingCallbackHost {
 #[tokio::test]
 async fn tool_callback_panic_rejects_the_js_promise_and_reports_failure() {
     let mut tasks = JoinSet::new();
-    let (runtime_tx, runtime_rx) = std_mpsc::channel();
+    let (runtime_tx, mut runtime_rx) = mpsc::unbounded_channel();
     let (failure_tx, mut failure_rx) = mpsc::unbounded_channel();
     spawn_tool(
         &mut tasks,
@@ -78,8 +77,9 @@ async fn tool_callback_panic_rejects_the_js_promise_and_reports_failure() {
         .await
         .expect("tool callback task")
         .expect("tool callback wrapper");
-    let command = runtime_rx
-        .recv_timeout(Duration::from_secs(1))
+    let command = tokio::time::timeout(Duration::from_secs(1), runtime_rx.recv())
+        .await
+        .expect("tool error timeout")
         .expect("tool error command");
     let RuntimeCommand::ToolError { id, error_text } = command else {
         panic!("expected a tool error command");

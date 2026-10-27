@@ -46,7 +46,7 @@ use crate::session_runtime::ToolName as CellToolName;
 pub(crate) struct CellActor;
 
 impl CellActor {
-    pub(crate) fn prepare<H: CellHost>(
+    pub(crate) async fn prepare<H: CellHost>(
         request: CellRequest,
         stored_values: HashMap<String, Arc<JsonValue>>,
         host: Arc<H>,
@@ -69,15 +69,20 @@ impl CellActor {
             runtime_request(request),
             event_tx,
             PendingRuntimeMode::PauseUntilResumed,
+            cell_state.cancellation_token(),
             task_failure_handler.clone(),
-        )?;
+        )
+        .await?;
         let handle = CellHandle::new(command_tx, Arc::clone(&cell_state));
         let task = run_cell(
             host,
             CellContext {
                 runtime_tx,
                 runtime_control_tx,
-                runtime_terminate_handle,
+                runtime_owner: RuntimeOwner {
+                    termination: runtime_terminate_handle,
+                    cancellation: cell_state.cancellation_token(),
+                },
                 cell_state,
             },
             event_rx,
@@ -95,10 +100,24 @@ impl CellActor {
 }
 
 struct CellContext {
-    runtime_tx: std::sync::mpsc::Sender<RuntimeCommand>,
-    runtime_control_tx: std::sync::mpsc::Sender<RuntimeControlCommand>,
-    runtime_terminate_handle: v8::IsolateHandle,
+    runtime_tx: mpsc::UnboundedSender<RuntimeCommand>,
+    runtime_control_tx: mpsc::UnboundedSender<RuntimeControlCommand>,
+    runtime_owner: RuntimeOwner,
     cell_state: Arc<CellState>,
+}
+
+// Owns V8 even before the actor is first polled. Abandoning a prepared cell or
+// aborting its actor must also stop synchronous JavaScript already on a worker.
+struct RuntimeOwner {
+    termination: v8::IsolateHandle,
+    cancellation: CancellationToken,
+}
+
+impl Drop for RuntimeOwner {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+        self.termination.terminate_execution();
+    }
 }
 
 struct Observer {
@@ -117,9 +136,10 @@ async fn run_cell<H: CellHost>(
     let CellContext {
         runtime_tx,
         runtime_control_tx,
-        runtime_terminate_handle,
+        runtime_owner,
         cell_state,
     } = context;
+    let runtime_terminate_handle = &runtime_owner.termination;
     let cancellation_token = cell_state.cancellation_token();
     let callback_cancellation_token = cancellation_token.child_token();
     let mut content_items = Vec::new();
@@ -149,7 +169,7 @@ async fn run_cell<H: CellHost>(
                 begin_termination(
                     &runtime_tx,
                     &runtime_control_tx,
-                    &runtime_terminate_handle,
+                    runtime_terminate_handle,
                     &cancellation_token,
                 );
                 if runtime_closed {
@@ -525,7 +545,7 @@ async fn run_cell<H: CellHost>(
     begin_termination(
         &runtime_tx,
         &runtime_control_tx,
-        &runtime_terminate_handle,
+        runtime_terminate_handle,
         &cancellation_token,
     );
     finish_callbacks(
@@ -600,8 +620,8 @@ fn observer_timer(observer: &Observer) -> Option<std::pin::Pin<Box<tokio::time::
 fn resume_for_observation(
     mode: ObserveMode,
     runtime_paused: &mut bool,
-    runtime_tx: &std::sync::mpsc::Sender<RuntimeCommand>,
-    runtime_control_tx: &std::sync::mpsc::Sender<RuntimeControlCommand>,
+    runtime_tx: &mpsc::UnboundedSender<RuntimeCommand>,
+    runtime_control_tx: &mpsc::UnboundedSender<RuntimeControlCommand>,
 ) {
     if *runtime_paused {
         let control = match mode {
@@ -616,8 +636,8 @@ fn resume_for_observation(
 }
 
 fn begin_termination(
-    runtime_tx: &std::sync::mpsc::Sender<RuntimeCommand>,
-    runtime_control_tx: &std::sync::mpsc::Sender<RuntimeControlCommand>,
+    runtime_tx: &mpsc::UnboundedSender<RuntimeCommand>,
+    runtime_control_tx: &mpsc::UnboundedSender<RuntimeControlCommand>,
     runtime_terminate_handle: &v8::IsolateHandle,
     cancellation_token: &CancellationToken,
 ) {
