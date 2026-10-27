@@ -14,6 +14,76 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use pretty_assertions::assert_eq;
 
+#[cfg(unix)]
+#[tokio::test]
+async fn consolidation_keeps_the_image_target_shown_during_streaming() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("first.png");
+    let second = directory.path().join("second.png");
+    for path in [&first, &second] {
+        image::RgbImage::new(/*width*/ 1, /*height*/ 1)
+            .save(path)
+            .unwrap();
+    }
+    let expected = url::Url::from_file_path(first.canonicalize().unwrap()).unwrap();
+    for replace in [false, true] {
+        let link = directory.path().join("latest.png");
+        std::os::unix::fs::symlink(&first, &link).unwrap();
+        let source = format!("[The latest image](<{}>)", link.display());
+        let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+        chat.local_image_links_enabled = true;
+        chat.on_agent_message_delta(source.clone(), /*from_replay*/ false);
+        let lines = chat
+            .stream_controller
+            .as_ref()
+            .unwrap()
+            .current_tail_lines();
+        assert!(
+            lines
+                .iter()
+                .flat_map(|line| &line.hyperlinks)
+                .any(|link| link.destination == expected.as_str())
+        );
+
+        std::fs::remove_file(&link).unwrap();
+        if replace {
+            std::os::unix::fs::symlink(&second, &link).unwrap();
+        }
+        chat.finalize_completed_assistant_message(Some(&source), /*from_replay*/ false);
+        let mut consolidated = false;
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::ConsolidateAgentMessage {
+                source,
+                cwd,
+                local_image_links,
+                ..
+            } = event
+            {
+                let cell = history_cell::AgentMarkdownCell::new(source, &cwd)
+                    .with_captured_image_links(local_image_links);
+                for width in [12, 80, 12] {
+                    let lines = cell.display_hyperlink_lines(width);
+                    let links = lines
+                        .iter()
+                        .flat_map(|line| &line.hyperlinks)
+                        .collect::<Vec<_>>();
+                    assert!(!links.is_empty());
+                    assert!(
+                        links
+                            .iter()
+                            .all(|link| link.destination == expected.as_str())
+                    );
+                }
+                consolidated = true;
+            }
+        }
+        assert!(consolidated);
+        if replace {
+            std::fs::remove_file(link).unwrap();
+        }
+    }
+}
+
 #[tokio::test]
 async fn image_link_capability_follows_the_message_through_consolidation() {
     let directory = tempfile::tempdir().unwrap();
@@ -35,11 +105,10 @@ async fn image_link_capability_follows_the_message_through_consolidation() {
             let mut consolidated = false;
             while let Ok(event) = rx.try_recv() {
                 if let AppEvent::ConsolidateAgentMessage {
-                    local_image_links_enabled,
-                    ..
+                    local_image_links, ..
                 } = event
                 {
-                    assert_eq!(local_image_links_enabled, !from_replay);
+                    assert_eq!(local_image_links.is_some(), !from_replay);
                     consolidated = true;
                 }
             }
@@ -61,11 +130,10 @@ async fn replayed_image_stream_stays_unlinked_when_live_output_resumes() {
     let mut consolidated = false;
     while let Ok(event) = rx.try_recv() {
         if let AppEvent::ConsolidateAgentMessage {
-            local_image_links_enabled,
-            ..
+            local_image_links, ..
         } = event
         {
-            assert!(!local_image_links_enabled);
+            assert!(local_image_links.is_none());
             consolidated = true;
         }
     }

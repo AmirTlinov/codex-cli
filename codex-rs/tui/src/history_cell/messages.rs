@@ -13,6 +13,7 @@ use crate::terminal_hyperlinks::remap_source_wrapped_line;
 use crate::wrapping::url_preserving_wrap_options;
 use crate::wrapping::word_wrap_line_with_source;
 use std::borrow::Cow;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub(crate) struct UserHistoryCell {
@@ -545,12 +546,18 @@ pub(crate) struct AgentMarkdownCell {
     rendered_lines: Option<MarkdownRenderCache>,
     spoken_artifacts: bool,
     question_titles: Vec<std::ops::Range<usize>>,
-    local_image_links: Option<LocalImageLinks>,
+    local_image_links: Option<Arc<LocalImageLinks>>,
 }
 
 impl AgentMarkdownCell {
     pub(crate) fn with_local_image_links(mut self, enabled: bool) -> Self {
-        self.local_image_links = enabled.then(|| LocalImageLinks::new(&self.cwd));
+        self.local_image_links = enabled.then(|| Arc::new(LocalImageLinks::new(&self.cwd)));
+        self
+    }
+
+    /// Preserve destinations already shown by the stream, including canonical symlink targets.
+    pub(crate) fn with_captured_image_links(mut self, links: Option<Arc<LocalImageLinks>>) -> Self {
+        self.local_image_links = links;
         self
     }
 
@@ -660,7 +667,7 @@ impl AgentMarkdownCell {
                     Some(self.cwd.as_path()),
                     self.inline_visualization_context.as_ref(),
                     list_spacing,
-                    self.local_image_links.as_ref(),
+                    self.local_image_links.as_deref(),
                 )
             };
             let lines = if self.question_titles.is_empty() {

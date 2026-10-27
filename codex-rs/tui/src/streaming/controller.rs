@@ -599,8 +599,8 @@ pub(crate) struct StreamController {
 }
 
 impl StreamController {
-    pub(crate) fn local_image_links_enabled(&self) -> bool {
-        self.core.render.local_image_links.is_some()
+    pub(crate) fn local_image_links(&self) -> Option<Arc<LocalImageLinks>> {
+        self.core.render.local_image_links.clone()
     }
 
     pub(crate) fn with_local_image_links(mut self, enabled: bool) -> Self {

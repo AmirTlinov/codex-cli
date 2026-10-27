@@ -90,7 +90,7 @@ impl ChatWidget {
     fn flush_answer_stream(&mut self, completed_message: Option<&str>) {
         let had_stream_controller = self.stream_controller.is_some();
         if let Some(mut controller) = self.stream_controller.take() {
-            let local_image_links_enabled = controller.local_image_links_enabled();
+            let local_image_links = controller.local_image_links();
             let needs_scrollback_reflow = controller.needs_scrollback_reflow();
             self.clear_active_stream_tail();
             let (cell, streamed_source) = controller.finalize();
@@ -149,7 +149,7 @@ impl ChatWidget {
                     copy_source,
                     cwd: self.config.cwd.to_path_buf(),
                     inline_visualization_context,
-                    local_image_links_enabled,
+                    local_image_links,
                     scrollback_reflow,
                     deferred_history_cell,
                 });
