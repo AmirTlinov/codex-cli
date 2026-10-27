@@ -996,7 +996,7 @@ async fn code_mode_session_provider_is_shared_across_threads() {
 }
 
 #[tokio::test]
-async fn mcp_invalidation_refreshes_threads_that_are_still_starting() {
+async fn mcp_invalidation_reconciles_starting_threads_and_leaves_idle_threads_parked() {
     struct BlockingThreadStartup {
         entered: tokio::sync::Notify,
         release: tokio::sync::Notify,
@@ -1037,6 +1037,9 @@ async fn mcp_invalidation_refreshes_threads_that_are_still_starting() {
 
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;
+    // Model prewarming also projects MCP tools. Keep this test's publication
+    // barrier specific to the MCP worker scheduled by startup invalidation.
+    config.model_provider.supports_websockets = false;
     // Resolve the model locally before waiting for the MCP lifecycle hook.
     config.model_catalog = Some(
         codex_models_manager::bundled_models_response().expect("bundled model catalog should load"),
@@ -1083,13 +1086,36 @@ async fn mcp_invalidation_refreshes_threads_that_are_still_starting() {
     assert!(manager.list_thread_ids().await.is_empty());
     manager.invalidate_mcp_runtimes().await;
     observer.release.notify_one();
-    starting
+    let thread = starting
         .await
         .expect("thread startup task should finish")
         .expect("thread should start");
     tokio::time::timeout(Duration::from_secs(5), observer.refreshed.notified())
         .await
         .expect("invalidation during startup should refresh the newly published thread");
+    let session = &thread.thread.session;
+    session.refresh_mcp_if_dirty().await;
+    let before = observer.projections.load(Ordering::Acquire);
+    manager.invalidate_mcp_runtimes().await;
+    manager.invalidate_mcp_runtimes().await;
+    session
+        .services
+        .auth_manager
+        .logout()
+        .await
+        .expect("logout");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), observer.refreshed.notified())
+            .await
+            .is_err(),
+        "global changes must not wake an idle chat"
+    );
+    assert_eq!(observer.projections.load(Ordering::Acquire), before);
+    session.refresh_mcp_if_dirty().await;
+    assert_eq!(observer.projections.load(Ordering::Acquire), before + 1);
+    assert!(session.services.mcp_runtime.current_auth_matches(None));
+    session.refresh_mcp_if_dirty().await;
+    assert_eq!(observer.projections.load(Ordering::Acquire), before + 1);
     let shutdown = manager
         .shutdown_all_threads_bounded(Duration::from_secs(5))
         .await;

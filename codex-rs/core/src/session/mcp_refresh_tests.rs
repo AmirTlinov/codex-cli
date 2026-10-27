@@ -7,7 +7,7 @@ use pretty_assertions::assert_eq;
 fn successful_manual_claim_consumes_only_preexisting_work() {
     for initially_pending in [false, true] {
         for invalidated_during_refresh in [false, true] {
-            let refresh = McpRefresh::new();
+            let refresh = McpRefresh::new(0, 0);
             if initially_pending {
                 refresh.invalidate();
             }

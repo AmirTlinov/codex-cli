@@ -897,20 +897,11 @@ impl ThreadManager {
         });
     }
 
-    /// Refreshes every loaded thread and marks threads that are still being created.
+    /// Invalidates shared inputs without waking idle threads. MCP reads and
+    /// model steps reconcile each thread before using its tools or resources.
     pub async fn invalidate_mcp_runtimes(&self) {
+        self.state.mcp_manager.invalidate_runtime_sources();
         self.invalidate_starting_mcp_runtimes();
-        let threads = self
-            .state
-            .threads
-            .read()
-            .await
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        for thread in threads {
-            thread.session.request_mcp_runtime_refresh();
-        }
     }
 
     /// Rebuilds loaded hook runtimes without reloading their session configurations.
@@ -2386,7 +2377,8 @@ impl ThreadManagerState {
                 Arc::clone(&self.plugins_manager),
                 Arc::clone(&extensions),
                 CodexAppsToolsCache::default(),
-            );
+            )
+            .with_shared_invalidation(&self.mcp_manager);
             (extensions, Arc::new(mcp_manager))
         } else {
             (Arc::clone(&self.extensions), Arc::clone(&self.mcp_manager))

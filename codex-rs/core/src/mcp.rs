@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use crate::config::Config;
 use crate::mcp_tool_exposure::SharedMcpDefinitions;
@@ -111,6 +113,7 @@ enum OrderedMcpOverlay {
 
 #[derive(Clone)]
 pub struct McpManager {
+    source_revision: Arc<AtomicU64>,
     connection_pool: codex_mcp::McpConnectionPool,
     plugins_manager: Arc<PluginsManager>,
     extensions: Arc<ExtensionRegistry<Config>>,
@@ -136,6 +139,7 @@ impl McpManager {
         codex_apps_tools_cache: ConnectorRuntimeManager<ToolInfo>,
     ) -> Self {
         Self {
+            source_revision: Arc::default(),
             connection_pool: codex_mcp::McpConnectionPool::default(),
             plugins_manager,
             extensions,
@@ -148,6 +152,19 @@ impl McpManager {
 
     pub fn codex_apps_tools_cache(&self) -> ConnectorRuntimeManager<ToolInfo> {
         self.codex_apps_tools_cache.clone()
+    }
+
+    pub(crate) fn with_shared_invalidation(mut self, owner: &Self) -> Self {
+        self.source_revision = Arc::clone(&owner.source_revision);
+        self
+    }
+
+    pub(crate) fn invalidate_runtime_sources(&self) {
+        self.source_revision.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(crate) fn runtime_source_revision(&self) -> u64 {
+        self.source_revision.load(Ordering::Acquire)
     }
 
     pub fn tool_catalog_cache(&self) -> McpToolCatalogCache {
