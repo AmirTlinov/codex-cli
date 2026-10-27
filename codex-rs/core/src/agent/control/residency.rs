@@ -16,7 +16,7 @@ use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
-use std::collections::VecDeque;
+use lru::LruCache;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tracing::warn;
@@ -116,10 +116,18 @@ pub(super) struct V2Residency {
     state: Mutex<V2ResidencyState>,
 }
 
-#[derive(Default)]
 struct V2ResidencyState {
-    residents: VecDeque<ThreadId>,
+    residents: LruCache<ThreadId, ()>,
     pending_slots: usize,
+}
+
+impl Default for V2ResidencyState {
+    fn default() -> Self {
+        Self {
+            residents: LruCache::unbounded(),
+            pending_slots: 0,
+        }
+    }
 }
 
 pub(super) struct V2ResidencySlot {
@@ -235,7 +243,10 @@ impl V2Residency {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .residents
-            .clone();
+            .iter()
+            .rev()
+            .map(|(thread_id, ())| *thread_id)
+            .collect::<Vec<_>>();
         for candidate_thread_id in candidates {
             if Some(candidate_thread_id) == protected_thread_id {
                 continue;
@@ -277,7 +288,7 @@ impl V2Residency {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        touch_resident(&mut state.residents, thread_id);
+        state.residents.put(thread_id, ());
     }
 
     fn remove(&self, thread_id: ThreadId) {
@@ -285,7 +296,7 @@ impl V2Residency {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .residents
-            .retain(|resident_thread_id| *resident_thread_id != thread_id);
+            .pop(&thread_id);
     }
 
     fn commit_slot(&self, thread_id: ThreadId) {
@@ -294,7 +305,7 @@ impl V2Residency {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.pending_slots = state.pending_slots.saturating_sub(1);
-        touch_resident(&mut state.residents, thread_id);
+        state.residents.put(thread_id, ());
     }
 
     fn release_pending_slot(&self) {
@@ -304,11 +315,6 @@ impl V2Residency {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.pending_slots = state.pending_slots.saturating_sub(1);
     }
-}
-
-fn touch_resident(residents: &mut VecDeque<ThreadId>, thread_id: ThreadId) {
-    residents.retain(|resident_thread_id| *resident_thread_id != thread_id);
-    residents.push_back(thread_id);
 }
 
 fn is_resident_candidate(thread: &CodexThread) -> bool {
