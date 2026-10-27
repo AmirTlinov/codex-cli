@@ -146,12 +146,26 @@ impl Entry {
         }
     }
 
-    async fn tool_catalog_for_chat(
+    async fn tool_catalog(
         &self,
         client: &ManagedClient,
         role: AcquisitionRole,
         cache_context: Option<&McpToolCatalogCacheContext>,
-    ) -> Result<Arc<ClientToolCatalog>, StartupOutcomeError> {
+        timeout: Duration,
+    ) -> Result<SharedCatalog, StartupOutcomeError> {
+        tokio::time::timeout(timeout, self.load_tool_catalog(client, role, cache_context))
+            .await
+            .map_err(|_| {
+                StartupOutcomeError::from(anyhow::anyhow!("MCP tool catalog refresh timed out"))
+            })?
+    }
+
+    async fn load_tool_catalog(
+        &self,
+        client: &ManagedClient,
+        role: AcquisitionRole,
+        cache_context: Option<&McpToolCatalogCacheContext>,
+    ) -> Result<SharedCatalog, StartupOutcomeError> {
         let initial = SharedCatalog {
             snapshot: client.tool_catalog.read(|snapshot| snapshot).await,
             freshness: client.initial_catalog_freshness,
@@ -160,7 +174,7 @@ impl Entry {
         // Startup belongs to the creator. A faster joiner may already have
         // published a private listing that cannot be reused by this caller.
         if role == AcquisitionRole::Creator {
-            return Ok(initial.for_chat());
+            return Ok(initial);
         }
         let (fetch, owns_fetch) = {
             let mut state = self
@@ -169,7 +183,7 @@ impl Entry {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let current = state.current.get_or_insert(initial);
             if current.is_fresh(client) {
-                return Ok(current.for_chat());
+                return Ok(current.clone());
             }
             // Only an advertised public cache contract permits coalescing.
             let cacheable = current.freshness.is_some();
@@ -222,7 +236,7 @@ impl Entry {
         if listed.generation >= catalog.generation {
             *catalog = listed.clone();
         }
-        Ok(listed.for_chat())
+        Ok(listed)
     }
 }
 
@@ -263,7 +277,7 @@ impl CatalogState {
                 key.server_name == crate::CODEX_APPS_MCP_SERVER_NAME,
                 "shared_connection",
                 &client.client,
-                Some(key.startup_timeout),
+                crate::rmcp_client::ToolCatalogTimeout::Waiters,
                 key.catalog_item_limit,
                 client.server_instructions.as_deref(),
             )
@@ -375,14 +389,16 @@ impl McpConnectionPool {
                         client.client.enable_request_cancellation();
                         client.tool_catalog = lease
                             .entry
-                            .tool_catalog_for_chat(
+                            .tool_catalog(
                                 &client,
                                 role,
                                 tool_catalog_cache_context.as_ref(),
+                                lease.entry.key.startup_timeout,
                             )
                             .or_cancel(&cancellation)
                             .await
-                            .unwrap_or(Err(StartupOutcomeError::Cancelled))?;
+                            .unwrap_or(Err(StartupOutcomeError::Cancelled))?
+                            .for_chat();
                         ConnectionSharing::Shared(lease)
                     } else {
                         lease.entry.remove_from_pool();
@@ -482,6 +498,17 @@ impl McpConnectionPool {
 }
 
 impl ConnectionLease {
+    pub(crate) async fn tool_catalog(
+        &self,
+        client: &ManagedClient,
+        timeout: Duration,
+    ) -> Result<ToolCatalogSnapshot, StartupOutcomeError> {
+        self.entry
+            .tool_catalog(client, AcquisitionRole::Joiner, None, timeout)
+            .await
+            .map(|catalog| catalog.snapshot)
+    }
+
     pub(crate) fn cancellation(&self) -> &CancellationToken {
         &self.cancellation
     }

@@ -282,19 +282,10 @@ impl McpServerView {
         let result = client
             .tool_catalog
             .refresh_after_notifications(&client.client.tool_list_revision(), timeout, || async {
-                let relist = crate::rmcp_client::list_tools_for_client_uncached(
-                    server_name,
-                    /*is_codex_apps_mcp_server*/ false,
-                    "list_changed",
-                    &client.client,
-                    Some(timeout),
-                    self.catalog_item_limit,
-                    client.server_instructions.as_deref(),
-                );
                 client
-                    .with_active_shared_lease(relist.boxed())
-                    .await?
-                    .map(|listing| (listing.tools, listing.meta))
+                    .refreshed_tool_catalog(server_name, timeout, self.catalog_item_limit)
+                    .boxed()
+                    .await
             })
             .await;
         if result.is_err() {

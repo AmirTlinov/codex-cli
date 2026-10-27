@@ -10,7 +10,7 @@ const MAX_MCP_CATALOG_PAGES: usize = 100;
 pub(crate) const MAX_MCP_CATALOG_ITEMS: usize = 2_048;
 pub(crate) const MAX_CODEX_APPS_TOOL_CATALOG_ITEMS: usize = 8_192;
 const MAX_MCP_PAGINATION_CURSOR_BYTES: usize = 64 * 1024;
-const DEFAULT_MCP_PAGINATION_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const DEFAULT_MCP_PAGINATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) async fn collect_paginated<T, F, Fut>(
     method: &str,
@@ -21,9 +21,16 @@ where
     F: FnMut(Option<PaginatedRequestParams>) -> Fut,
     Fut: Future<Output = Result<(Vec<T>, Option<String>)>>,
 {
-    collect_paginated_with_limit(method, overall_timeout, MAX_MCP_CATALOG_ITEMS, fetch).await
+    collect_paginated_with_limit(
+        method,
+        Some(overall_timeout.unwrap_or(DEFAULT_MCP_PAGINATION_TIMEOUT)),
+        MAX_MCP_CATALOG_ITEMS,
+        fetch,
+    )
+    .await
 }
 
+/// `None` leaves the deadline to the owner polling this future.
 pub(crate) async fn collect_paginated_with_limit<T, F, Fut>(
     method: &str,
     overall_timeout: Option<Duration>,
@@ -73,7 +80,9 @@ where
         }
     };
 
-    let timeout = overall_timeout.unwrap_or(DEFAULT_MCP_PAGINATION_TIMEOUT);
+    let Some(timeout) = overall_timeout else {
+        return collect.await;
+    };
     tokio::time::timeout(timeout, collect)
         .await
         .map_err(|_| anyhow!("{method} pagination timed out after {timeout:?}"))?

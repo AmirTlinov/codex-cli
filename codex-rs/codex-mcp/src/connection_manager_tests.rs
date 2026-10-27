@@ -468,7 +468,7 @@ async fn legacy_tool_catalog_rejects_repeated_pagination_cursor() -> anyhow::Res
         /*is_codex_apps_mcp_server*/ false,
         "test",
         &client,
-        Some(Duration::from_secs(5)),
+        Some(Duration::from_secs(5)).into(),
         crate::pagination::MAX_MCP_CATALOG_ITEMS,
         /*server_instructions*/ None,
     )
@@ -5835,7 +5835,7 @@ async fn reconciliation_reuses_connection_without_relisting_regular_tools() -> a
         /*is_codex_apps_mcp_server*/ false,
         /*codex_apps_refresh_trigger*/ "test",
         &client,
-        /*timeout*/ None,
+        /*timeout*/ None.into(),
         crate::pagination::MAX_MCP_CATALOG_ITEMS,
         initialize.instructions.as_deref(),
     )

@@ -833,16 +833,32 @@ pub(crate) struct ToolCatalogListing {
     pub(crate) freshness: Option<CatalogFreshness>,
 }
 
+pub(crate) enum ToolCatalogTimeout {
+    Request(Duration),
+    /// The shared fetch lives until its last waiter cancels or reaches its own deadline.
+    Waiters,
+}
+
+impl From<Option<Duration>> for ToolCatalogTimeout {
+    fn from(timeout: Option<Duration>) -> Self {
+        Self::Request(timeout.unwrap_or(crate::pagination::DEFAULT_MCP_PAGINATION_TIMEOUT))
+    }
+}
+
 #[instrument(level = "trace", skip_all, fields(server_name = %server_name))]
 pub(crate) async fn list_tools_for_client_uncached(
     server_name: &str,
     is_codex_apps_mcp_server: bool,
     codex_apps_refresh_trigger: &'static str,
     client: &Arc<RmcpClient>,
-    timeout: Option<Duration>,
+    timeout: ToolCatalogTimeout,
     catalog_item_limit: usize,
     server_instructions: Option<&str>,
 ) -> Result<ToolCatalogListing> {
+    let timeout = match timeout {
+        ToolCatalogTimeout::Request(timeout) => Some(timeout),
+        ToolCatalogTimeout::Waiters => None,
+    };
     let meta = StdMutex::new(None);
     let fetch_start = Instant::now();
     let listed_at = tokio::time::Instant::now();
@@ -1281,7 +1297,7 @@ async fn start_server_task(
         is_codex_apps_mcp_server,
         /*codex_apps_refresh_trigger*/ "initial",
         &client,
-        startup_timeout,
+        startup_timeout.into(),
         catalog_item_limit,
         initialize_result.instructions.as_deref(),
     )
