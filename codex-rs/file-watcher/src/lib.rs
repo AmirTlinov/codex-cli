@@ -3,6 +3,7 @@
 
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,6 +25,9 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio::time::sleep_until;
 use tracing::warn;
+
+mod watch_index;
+use watch_index::WatchIndex;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Coalesced file change notification for a subscriber.
@@ -48,6 +52,9 @@ struct WatchState {
     next_subscriber_id: SubscriberId,
     path_ref_counts: HashMap<PathBuf, PathWatchCounts>,
     subscribers: HashMap<SubscriberId, SubscriberState>,
+    watch_index: WatchIndex,
+    #[cfg(test)]
+    path_resolutions: usize,
 }
 
 struct SubscriberState {
@@ -472,6 +479,7 @@ impl FileWatcher {
                 }
             };
 
+            state.watch_index.insert(&registration.key, subscriber_id);
             let counts = state
                 .path_ref_counts
                 .entry(actual.path.clone())
@@ -533,6 +541,13 @@ impl FileWatcher {
                 actual
             };
 
+            if !state.subscribers[&subscriber_id]
+                .watched_paths
+                .contains_key(subscriber_watch)
+            {
+                state.watch_index.remove(subscriber_watch, subscriber_id);
+            }
+
             let Some(counts) = state.path_ref_counts.get_mut(&actual.path) else {
                 continue;
             };
@@ -558,7 +573,8 @@ impl FileWatcher {
         };
 
         let mut inner_guard: Option<std::sync::MutexGuard<'_, FileWatcherInner>> = None;
-        for (_subscriber_watch, subscriber_watch_state) in subscriber.watched_paths {
+        for (subscriber_watch, subscriber_watch_state) in subscriber.watched_paths {
+            state.watch_index.remove(&subscriber_watch, subscriber_id);
             let Some(path_counts) = state
                 .path_ref_counts
                 .get_mut(&subscriber_watch_state.actual.path)
@@ -714,34 +730,62 @@ impl FileWatcher {
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut actual_watch_moves = Vec::new();
-            let mut subscribers_to_notify = Vec::new();
+            let mut changed_by_subscriber: HashMap<SubscriberId, Vec<PathBuf>> = HashMap::new();
+            let mut affected_watches = HashSet::new();
+            for event_path in event_paths {
+                affected_watches.extend(state.watch_index.matching(event_path));
+            }
 
-            for subscriber in state.subscribers.values_mut() {
-                let mut changed_paths = Vec::new();
-                for event_path in event_paths {
-                    for (subscriber_watch, subscriber_watch_state) in &mut subscriber.watched_paths
-                    {
+            for subscriber_watch in affected_watches {
+                // Resolve a shared path once, regardless of how many chats watch it.
+                let (new_actual, _new_matched, fallback) =
+                    actual_watch_path(&subscriber_watch.requested);
+                let exists = subscriber_watch.matched.path.exists();
+                let requested_exists =
+                    if subscriber_watch.matched.path == subscriber_watch.requested.path {
+                        exists
+                    } else {
+                        subscriber_watch.requested.path.exists()
+                    };
+                #[cfg(test)]
+                {
+                    state.path_resolutions += 1;
+                }
+                let WatchState {
+                    subscribers,
+                    watch_index,
+                    ..
+                } = &mut *state;
+                for subscriber_id in watch_index.subscribers(&subscriber_watch) {
+                    let Some(subscriber_watch_state) = subscribers
+                        .get_mut(&subscriber_id)
+                        .and_then(|subscriber| subscriber.watched_paths.get_mut(&subscriber_watch))
+                    else {
+                        continue;
+                    };
+                    // Earlier paths can move a missing watch to its fallback even
+                    // when they do not emit a notification for this subscriber.
+                    for event_path in event_paths {
                         if let Some(path) = changed_path_for_event(
-                            subscriber_watch,
+                            &subscriber_watch,
                             subscriber_watch_state,
                             event_path,
+                            exists,
+                            requested_exists,
                         ) {
-                            changed_paths.push(path);
+                            changed_by_subscriber
+                                .entry(subscriber_id)
+                                .or_default()
+                                .push(path);
                         }
-
-                        let (new_actual, _new_matched, fallback) =
-                            actual_watch_path(&subscriber_watch.requested);
                         subscriber_watch_state.fallback |= fallback;
                         if subscriber_watch_state.actual != new_actual {
                             let old_actual = subscriber_watch_state.actual.clone();
                             let count = subscriber_watch_state.count;
                             subscriber_watch_state.actual = new_actual.clone();
-                            actual_watch_moves.push((old_actual, new_actual, count));
+                            actual_watch_moves.push((old_actual, new_actual.clone(), count));
                         }
                     }
-                }
-                if !changed_paths.is_empty() {
-                    subscribers_to_notify.push((subscriber.tx.clone(), changed_paths));
                 }
             }
 
@@ -757,7 +801,15 @@ impl FileWatcher {
                 );
             }
 
-            subscribers_to_notify
+            changed_by_subscriber
+                .into_iter()
+                .filter_map(|(id, paths)| {
+                    state
+                        .subscribers
+                        .get(&id)
+                        .map(|subscriber| (subscriber.tx.clone(), paths))
+                })
+                .collect()
         };
 
         for (subscriber, changed_paths) in subscribers_to_notify {
@@ -864,12 +916,15 @@ fn changed_path_for_event(
     subscriber_watch: &SubscriberWatchKey,
     subscriber_watch_state: &mut SubscriberWatchState,
     event_path: &Path,
+    exists: bool,
+    requested_exists: bool,
 ) -> Option<PathBuf> {
     if let Some(path) = changed_path_for_matched_path(
         subscriber_watch,
         subscriber_watch_state,
         &subscriber_watch.matched,
         event_path,
+        exists,
     ) {
         return Some(path);
     }
@@ -881,6 +936,7 @@ fn changed_path_for_event(
         subscriber_watch_state,
         &subscriber_watch.requested,
         event_path,
+        requested_exists,
     )
 }
 
@@ -891,14 +947,14 @@ fn changed_path_for_matched_path(
     subscriber_watch_state: &mut SubscriberWatchState,
     matched: &WatchPath,
     event_path: &Path,
+    now_exists: bool,
 ) -> Option<PathBuf> {
     let requested = &subscriber_watch.requested;
     if event_path == matched.path {
-        subscriber_watch_state.last_exists = matched.path.exists();
+        subscriber_watch_state.last_exists = now_exists;
         return Some(requested.path.clone());
     }
     if matched.path.starts_with(event_path) {
-        let now_exists = matched.path.exists();
         if subscriber_watch_state.fallback {
             let should_notify = now_exists || subscriber_watch_state.last_exists;
             subscriber_watch_state.last_exists = now_exists;
@@ -918,7 +974,7 @@ fn changed_path_for_matched_path(
     if !(matched.recursive || event_path.parent() == Some(matched.path.as_path())) {
         return None;
     }
-    subscriber_watch_state.last_exists = matched.path.exists();
+    subscriber_watch_state.last_exists = now_exists;
     Some(
         event_path
             .strip_prefix(&matched.path)
