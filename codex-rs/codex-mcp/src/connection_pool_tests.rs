@@ -49,6 +49,7 @@ pub(crate) struct TestServer {
     release_tools: Arc<Semaphore>,
     fail_tools: Arc<AtomicBool>,
     public_ttl_ms: Arc<Mutex<Option<u64>>>,
+    private_catalog: Arc<AtomicBool>,
     notify_tools_changed: Arc<AtomicBool>,
 }
 
@@ -67,6 +68,7 @@ impl Default for TestServer {
             release_tools: Arc::new(Semaphore::new(0)),
             fail_tools: Arc::default(),
             public_ttl_ms: Arc::default(),
+            private_catalog: Arc::default(),
             notify_tools_changed: Arc::default(),
         }
     }
@@ -123,9 +125,12 @@ impl ServerHandler for TestServer {
         }
         let mut result = ListToolsResult::with_all_items(self.tools.lock().unwrap().clone());
         if let Some(ttl) = *self.public_ttl_ms.lock().unwrap() {
-            result = result
-                .with_ttl_ms(ttl)
-                .with_cache_scope(rmcp::model::CacheScope::Public);
+            let scope = if self.private_catalog.load(Ordering::Acquire) {
+                rmcp::model::CacheScope::Private
+            } else {
+                rmcp::model::CacheScope::Public
+            };
+            result = result.with_ttl_ms(ttl).with_cache_scope(scope);
         }
         Ok(result)
     }
@@ -711,6 +716,59 @@ fn cached_startup(
         release,
         server.clone(),
     )
+}
+
+#[tokio::test(start_paused = true)]
+async fn creator_keeps_its_startup_catalog_when_a_joiner_publishes_first() {
+    for (ttl, private) in [(None, false), (Some(0), false), (Some(1_000), true)] {
+        let pool = McpConnectionPool::default();
+        let key = key(&context(), &config());
+        let server = TestServer::default();
+        let launch = cached_startup(&server, &Arc::new(AtomicUsize::new(0)));
+        *server.public_ttl_ms.lock().unwrap() = ttl;
+        server.private_catalog.store(private, Ordering::Release);
+        let (creator, role) = pool
+            .acquire(
+                key.clone(),
+                &Arc::default(),
+                Arc::default(),
+                &CancellationToken::new(),
+                &launch,
+            )
+            .await
+            .unwrap();
+        let initial = creator.entry.client.clone().await.unwrap();
+        *server.tools.lock().unwrap() = vec![create_test_tool("test_server", "joiner").tool];
+        let joiner = pool
+            .connect(
+                Arc::default(),
+                key,
+                Arc::default(),
+                /*tool_catalog_cache_context*/ None,
+                CancellationToken::new(),
+                &launch,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            joiner
+                .tool_catalog
+                .read(|s| s.tools[0].tool.name.to_string())
+                .await,
+            "joiner"
+        );
+
+        let original = creator
+            .entry
+            .tool_catalog_for_chat(&initial, role, /*cache_context*/ None)
+            .await
+            .unwrap();
+        assert_eq!(
+            original.read(|s| s.tools[0].tool.name.to_string()).await,
+            "test"
+        );
+        assert_eq!(server.tool_listings.load(Ordering::SeqCst), 2);
+    }
 }
 
 #[tokio::test(start_paused = true)]
