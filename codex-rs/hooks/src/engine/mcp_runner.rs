@@ -71,6 +71,13 @@ pub(crate) async fn run_mcp_tool(
                 .get_or_insert_with(Map::new)
                 .extend(metadata.clone());
         }
+        // The event belongs to the issuing turn. Argument templates may change
+        // the tool input, but must not change which turn owns the request.
+        if let Some(turn_id) = hook_event.get("turn_id").and_then(Value::as_str) {
+            call_metadata
+                .get_or_insert_with(Map::new)
+                .insert("turnId".to_string(), Value::String(turn_id.to_string()));
+        }
         executor
             .execute(HookMcpCall {
                 server: server.to_string(),

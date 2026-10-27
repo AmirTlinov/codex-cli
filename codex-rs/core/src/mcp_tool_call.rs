@@ -1337,6 +1337,10 @@ fn build_mcp_tool_call_request_meta(
 ) -> Option<serde_json::Value> {
     let mut request_meta = serde_json::Map::new();
     request_meta.insert(
+        "turnId".to_string(),
+        serde_json::Value::String(step_context.turn.sub_id.clone()),
+    );
+    request_meta.insert(
         "callId".to_string(),
         serde_json::Value::String(call_id.to_string()),
     );

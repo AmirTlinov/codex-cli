@@ -92,6 +92,7 @@ fn missing_placeholder_fails_without_passing_unresolved_input() {
 async fn mcp_tool_results_use_command_hook_output_contract() {
     let configured_input = serde_json::from_value::<Map<String, Value>>(json!({
         "file_path": "${tool_input.file_path}",
+        "turn_id": "template-value",
     }))
     .expect("object input");
     let handler = ConfiguredHandler {
@@ -123,8 +124,11 @@ async fn mcp_tool_results_use_command_hook_output_contract() {
         "security",
         "scan",
         &configured_input,
-        &json!({ "tool_input": { "file_path": "/tmp/example.rs" } }),
-        /*metadata*/ None,
+        &json!({ "turn_id": "issuing-turn", "tool_input": { "file_path": "/tmp/example.rs" } }),
+        Some(&Map::from_iter([(
+            "turnId".to_string(),
+            json!("overridden"),
+        )])),
     )
     .await;
 
@@ -137,9 +141,14 @@ async fn mcp_tool_results_use_command_hook_output_contract() {
             server: "security".to_string(),
             tool: "scan".to_string(),
             environment_id: None,
-            metadata: None,
-            input: serde_json::from_value(json!({ "file_path": "/tmp/example.rs" }))
-                .expect("object input"),
+            metadata: Some(Map::from_iter([(
+                "turnId".to_string(),
+                json!("issuing-turn")
+            )])),
+            input: serde_json::from_value(
+                json!({ "file_path": "/tmp/example.rs", "turn_id": "template-value" })
+            )
+            .expect("object input"),
             timeout: Duration::from_secs(30),
         }]
     );
