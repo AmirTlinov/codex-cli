@@ -73,7 +73,7 @@ expression: lines
             Span::from(" "),
             Span::from("  "),
             Span::from(" "),
-            Span::from("https://example.com/").underlined(),
+            Span::from("https://example.com/").fg(Color::Rgb(29, 101, 244)).underlined(),
         ]).bg(Color::Rgb(244, 244, 244)),
         hyperlinks: [
             TerminalHyperlink {
@@ -91,7 +91,7 @@ expression: lines
             Span::from(" "),
             Span::from("  "),
             Span::from(" "),
-            Span::from("a/very/long/path/to/").underlined(),
+            Span::from("a/very/long/path/to/").fg(Color::Rgb(29, 101, 244)).underlined(),
         ]).bg(Color::Rgb(244, 244, 244)),
         hyperlinks: [
             TerminalHyperlink {
@@ -109,7 +109,7 @@ expression: lines
             Span::from(" "),
             Span::from("  "),
             Span::from(" "),
-            Span::from("a/table/artifact").underlined(),
+            Span::from("a/table/artifact").fg(Color::Rgb(29, 101, 244)).underlined(),
         ]).bg(Color::Rgb(244, 244, 244)),
         hyperlinks: [
             TerminalHyperlink {
