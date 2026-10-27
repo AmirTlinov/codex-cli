@@ -192,7 +192,7 @@ impl ClientToolCatalog {
     ) -> Result<()>
     where
         F: FnMut() -> Fut,
-        Fut: Future<Output = Result<(Vec<ToolInfo>, Option<Arc<serde_json::Value>>)>>,
+        Fut: Future<Output = Result<ToolCatalogSnapshot>>,
     {
         if self.notifications_current(notifications) {
             return Ok(());
@@ -216,11 +216,8 @@ impl ClientToolCatalog {
                 if notifications.current() != revision {
                     continue;
                 }
-                let (tools, meta) = tools?;
-                current.source = CatalogSource::Local {
-                    tools: tools.into(),
-                    meta,
-                };
+                let ToolCatalogSnapshot { tools, meta, .. } = tools?;
+                current.source = CatalogSource::Local { tools, meta };
                 current.revision += 1;
                 self.listed_notification_revision
                     .store(revision, Ordering::Release);

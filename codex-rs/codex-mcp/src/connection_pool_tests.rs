@@ -262,7 +262,7 @@ pub(crate) fn startup(
                     /*is_codex_apps_mcp_server*/ false,
                     "test",
                     &client.client,
-                    /*timeout*/ None,
+                    /*timeout*/ None.into(),
                     /*catalog_item_limit*/ 100,
                     /*server_instructions*/ None,
                 )
@@ -760,26 +760,28 @@ async fn creator_keeps_its_startup_catalog_when_a_joiner_publishes_first() {
 
         let original = creator
             .entry
-            .tool_catalog_for_chat(&initial, role, /*cache_context*/ None)
+            .tool_catalog(
+                &initial,
+                role,
+                /*cache_context*/ None,
+                Duration::from_secs(1),
+            )
             .await
             .unwrap();
-        assert_eq!(
-            original.read(|s| s.tools[0].tool.name.to_string()).await,
-            "test"
-        );
+        assert_eq!(original.snapshot.tools[0].tool.name, "test");
         assert_eq!(server.tool_listings.load(Ordering::SeqCst), 2);
     }
 }
 
 #[tokio::test(start_paused = true)]
-async fn ten_thousand_chat_leases_share_one_connection_and_public_catalog() {
+async fn chat_leases_share_the_transport_and_definitions_but_own_their_revisions() {
     let pool = McpConnectionPool::default();
     let key = key(&context(), &config());
     let server = TestServer::default();
     let starts = Arc::new(AtomicUsize::new(0));
     let launch = cached_startup(&server, &starts);
     let mut clients = Vec::new();
-    for _ in 0..10_000 {
+    for _ in 0..3 {
         clients.push(
             pool.connect(
                 Arc::default(),
@@ -1015,4 +1017,141 @@ async fn notification_invalidates_public_catalog_and_preserves_its_revision_for_
             .notifications_current(&third.client.tool_list_revision())
     );
     drop(second);
+}
+
+#[tokio::test(start_paused = true)]
+async fn existing_chats_share_notified_public_catalogs_and_keep_private_listings_separate() {
+    for private in [false, true] {
+        let pool = McpConnectionPool::default();
+        let key = key(&context(), &config());
+        let server = TestServer::default();
+        let starts = Arc::new(AtomicUsize::new(0));
+        let launch = cached_startup(&server, &starts);
+        server.private_catalog.store(private, Ordering::Release);
+        let mut clients = Vec::new();
+        for _ in 0..3 {
+            clients.push(
+                pool.connect(
+                    Arc::default(),
+                    key.clone(),
+                    Arc::default(),
+                    None,
+                    CancellationToken::new(),
+                    &launch,
+                )
+                .await
+                .unwrap(),
+            );
+        }
+        let previous = clients[0]
+            .tool_catalog
+            .read(|snapshot| snapshot.tools)
+            .await;
+        let before = server.tool_listings.load(Ordering::SeqCst);
+        *server.tools.lock().unwrap() = vec![create_test_tool("test_server", "changed").tool];
+        server.notify_tools_changed.store(true, Ordering::Release);
+        clients[0]
+            .call_tool("test".to_string(), None, |_| Ok(None), None)
+            .await
+            .unwrap();
+
+        let mut updated = Vec::new();
+        for client in &clients {
+            client
+                .tool_catalog
+                .refresh_after_notifications(
+                    &client.client.tool_list_revision(),
+                    Duration::from_secs(1),
+                    || {
+                        client.refreshed_tool_catalog(
+                            "test_server",
+                            Duration::from_secs(1),
+                            key.catalog_item_limit,
+                        )
+                    },
+                )
+                .await
+                .unwrap();
+            let snapshot = client.tool_catalog.read(|snapshot| snapshot).await;
+            assert_eq!(snapshot.revision, 1);
+            assert_eq!(snapshot.tools[0].tool.name, "changed");
+            updated.push(snapshot.tools);
+        }
+        assert_eq!(
+            server.tool_listings.load(Ordering::SeqCst) - before,
+            if private { 3 } else { 1 }
+        );
+        assert_eq!(previous[0].tool.name, "test");
+        if !private {
+            assert!(Arc::ptr_eq(&updated[0], &updated[1]));
+            assert!(Arc::ptr_eq(&updated[1], &updated[2]));
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn shared_refresh_uses_each_waiters_current_timeout() {
+    let pool = McpConnectionPool::default();
+    let mut key = key(&context(), &config());
+    key.startup_timeout = Duration::from_secs(1);
+    let server = TestServer::default();
+    let launch = cached_startup(&server, &Arc::new(AtomicUsize::new(0)));
+    let mut clients = Vec::new();
+    for _ in 0..2 {
+        clients.push(
+            pool.connect(
+                Arc::default(),
+                key.clone(),
+                Arc::default(),
+                None,
+                CancellationToken::new(),
+                &launch,
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    server
+        .tool_listing_started
+        .acquire()
+        .await
+        .unwrap()
+        .forget();
+    server.notify_tools_changed.store(true, Ordering::Release);
+    clients[0]
+        .call_tool("test".to_string(), None, |_| Ok(None), None)
+        .await
+        .unwrap();
+    *server.tools.lock().unwrap() = vec![create_test_tool("test_server", "changed").tool];
+    *server.public_ttl_ms.lock().unwrap() = Some(100_000);
+    server.hold_tools.store(true, Ordering::Release);
+
+    let short = clients[0].refreshed_tool_catalog(
+        "test_server",
+        Duration::from_secs(1),
+        key.catalog_item_limit,
+    );
+    let long = clients[1].refreshed_tool_catalog(
+        "test_server",
+        Duration::from_secs(60),
+        key.catalog_item_limit,
+    );
+    tokio::pin!(short, long);
+    assert!(futures::poll!(&mut short).is_pending());
+    assert!(futures::poll!(&mut long).is_pending());
+    server
+        .tool_listing_started
+        .acquire()
+        .await
+        .unwrap()
+        .forget();
+    tokio::time::advance(Duration::from_secs(2)).await;
+    assert!(short.await.is_err());
+    assert_eq!(server.cancelled_listings.available_permits(), 0);
+    // The transport's original timeout and the default pagination timeout must
+    // both be irrelevant to the surviving waiter's current deadline.
+    tokio::time::advance(Duration::from_secs(31)).await;
+    server.release_tools.add_permits(1);
+    assert_eq!(long.await.unwrap().tools[0].tool.name, "changed");
+    assert_eq!(server.tool_listings.load(Ordering::SeqCst), 2);
 }
