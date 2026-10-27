@@ -1198,6 +1198,7 @@ async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
         meta,
         serde_json::json!({
             "callId": "call-custom",
+            "turnId": turn_context.sub_id,
             crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
         })
     );
@@ -1253,6 +1254,7 @@ async fn mcp_tool_call_request_meta_uses_the_issuing_step(
         ),
         Some(serde_json::json!({
             "callId": "call-b",
+            "turnId": turn_context.sub_id,
             crate::X_CODEX_TURN_METADATA_HEADER: expected,
             CONFIRMATION_POLICIES_META_KEY: {},
         })),
@@ -1292,6 +1294,7 @@ async fn guardian_mcp_tool_call_request_meta_excludes_actor_confirmation_policy(
         });
         let expected = Some(serde_json::json!({
             "callId": "call-guardian",
+            "turnId": turn_context.sub_id,
             crate::X_CODEX_TURN_METADATA_HEADER: expected_mcp_turn_metadata(&turn_context),
         }));
         let step_context = StepContext::for_test(Arc::new(turn_context));
@@ -1426,6 +1429,7 @@ async fn plugin_mcp_tool_call_request_meta_includes_plugin_id() {
         ),
         Some(serde_json::json!({
             "callId": "call-plugin",
+            "turnId": turn_context.sub_id,
             crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
             MCP_TOOL_PLUGIN_ID_META_KEY: "sample@test",
         }))
@@ -1594,6 +1598,7 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
         ),
         Some(serde_json::json!({
             "callId": "call_abc123xyz789",
+            "turnId": turn_context.sub_id,
             crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
             MCP_TOOL_CODEX_APPS_META_KEY: expected_apps_meta,
         }))
@@ -1617,6 +1622,7 @@ async fn codex_apps_tool_call_request_meta_includes_call_id_without_existing_cod
         ),
         Some(serde_json::json!({
             "callId": "call_abc123xyz789",
+            "turnId": turn_context.sub_id,
             crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
             MCP_TOOL_CODEX_APPS_META_KEY: {
                 "call_id": "call_abc123xyz789",
