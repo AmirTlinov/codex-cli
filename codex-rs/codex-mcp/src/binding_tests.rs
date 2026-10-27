@@ -84,6 +84,7 @@ async fn test_step(
         /*updates*/ None,
     ));
     let managed_client = Arc::new(ManagedClient {
+        initial_catalog_freshness: None,
         connection_sharing: Default::default(),
         shared_elicitation: None,
         _auth_change_notifications: None,

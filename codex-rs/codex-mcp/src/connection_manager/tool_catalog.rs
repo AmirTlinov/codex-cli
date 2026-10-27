@@ -31,6 +31,7 @@ use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::rmcp_client::CODEX_APPS_REFRESH_DURATION_METRIC;
 use crate::rmcp_client::MCP_TOOLS_LIST_DURATION_METRIC;
 use crate::rmcp_client::ManagedClient;
+use crate::rmcp_client::ToolCatalogListing;
 use crate::rmcp_client::list_tools_for_client_uncached;
 use crate::rmcp_client::prepare_codex_apps_tools_for_model;
 use crate::runtime::emit_duration;
@@ -725,12 +726,16 @@ impl McpConnectionSet {
                             cache_context.begin_fetch(ConnectorRuntimeFetchSource::HardRefresh)
                         },
                     );
-                    let (client_tools, meta) = list_tools_for_client_uncached(
+                    let ToolCatalogListing {
+                        tools: client_tools,
+                        meta,
+                        ..
+                    } = list_tools_for_client_uncached(
                         CODEX_APPS_MCP_SERVER_NAME,
                         /*is_codex_apps_mcp_server*/ true,
                         /*codex_apps_refresh_trigger*/ "explicit",
                         &managed_client.client,
-                        view.tool_timeout,
+                        view.tool_timeout.into(),
                         view.catalog_item_limit,
                         managed_client.server_instructions.as_deref(),
                     )

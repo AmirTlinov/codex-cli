@@ -111,6 +111,11 @@ impl ClientToolCatalog {
         }
     }
 
+    pub(crate) fn with_notification_revision(mut self, revision: u64) -> Self {
+        *self.listed_notification_revision.get_mut() = revision;
+        self
+    }
+
     pub(crate) async fn read<R>(&self, read: impl FnOnce(ToolCatalogSnapshot) -> R) -> R {
         let (_current, snapshot) = self.read_current().await;
         read(snapshot)
@@ -187,7 +192,7 @@ impl ClientToolCatalog {
     ) -> Result<()>
     where
         F: FnMut() -> Fut,
-        Fut: Future<Output = Result<(Vec<ToolInfo>, Option<Arc<serde_json::Value>>)>>,
+        Fut: Future<Output = Result<ToolCatalogSnapshot>>,
     {
         if self.notifications_current(notifications) {
             return Ok(());
@@ -211,11 +216,8 @@ impl ClientToolCatalog {
                 if notifications.current() != revision {
                     continue;
                 }
-                let (tools, meta) = tools?;
-                current.source = CatalogSource::Local {
-                    tools: tools.into(),
-                    meta,
-                };
+                let ToolCatalogSnapshot { tools, meta, .. } = tools?;
+                current.source = CatalogSource::Local { tools, meta };
                 current.revision += 1;
                 self.listed_notification_revision
                     .store(revision, Ordering::Release);

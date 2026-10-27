@@ -26,6 +26,7 @@ use tokio_util::task::AbortOnDropHandle;
 
 #[derive(Clone)]
 pub(crate) struct ManagedClient {
+    pub(crate) initial_catalog_freshness: Option<super::CatalogFreshness>,
     pub(crate) connection_sharing: ConnectionSharing,
     /// The calling chat's input handler, separate from the shared transport's startup handler.
     pub(crate) shared_elicitation: Option<Arc<SendElicitation>>,
@@ -41,6 +42,40 @@ pub(crate) struct ManagedClient {
 }
 
 impl ManagedClient {
+    /// Refresh discovery through the transport's public catalog cache, while private
+    /// catalogs and each chat's revision remain independent.
+    pub(crate) async fn refreshed_tool_catalog(
+        &self,
+        server_name: &str,
+        timeout: Duration,
+        catalog_item_limit: usize,
+    ) -> Result<crate::client_tool_catalog::ToolCatalogSnapshot> {
+        self.with_active_shared_lease(async {
+            if let ConnectionSharing::Shared(lease) = &self.connection_sharing {
+                return lease
+                    .tool_catalog(self, timeout)
+                    .await
+                    .map_err(anyhow::Error::new);
+            }
+            let listing = super::list_tools_for_client_uncached(
+                server_name,
+                /*is_codex_apps_mcp_server*/ false,
+                "list_changed",
+                &self.client,
+                Some(timeout).into(),
+                catalog_item_limit,
+                self.server_instructions.as_deref(),
+            )
+            .await?;
+            Ok(crate::client_tool_catalog::ToolCatalogSnapshot {
+                revision: 0,
+                tools: listing.tools.into(),
+                meta: listing.meta,
+            })
+        })
+        .await?
+    }
+
     pub(crate) async fn with_active_shared_lease<T>(
         &self,
         operation: impl Future<Output = T>,
