@@ -379,6 +379,78 @@ async fn matching_subscribers_are_notified() {
 }
 
 #[tokio::test]
+async fn shared_paths_are_resolved_once_and_unrelated_paths_are_not_inspected() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let root = directory.path().canonicalize().expect("canonical root");
+    let shared = root.join("shared");
+    std::fs::create_dir(&shared).expect("shared directory");
+    let watcher = Arc::new(FileWatcher::noop());
+    let (first, mut first_rx) = watcher.add_subscriber();
+    let (second, mut second_rx) = watcher.add_subscriber();
+    let (unrelated, _unrelated_rx) = watcher.add_subscriber();
+    let first_registration = first.register_path(shared.clone(), true);
+    let second_registration = second.register_path(shared.clone(), true);
+    let duplicate = second.register_path(shared.clone(), true);
+    let _unrelated = unrelated.register_path(root.join("shared-other"), true);
+    let changed = shared.join("SKILL.md");
+
+    watcher.send_paths_for_test(vec![changed.clone()]).await;
+    assert_eq!(first_rx.recv().await.unwrap().paths, vec![changed.clone()]);
+    assert_eq!(second_rx.recv().await.unwrap().paths, vec![changed.clone()]);
+    assert_eq!(watcher.state.read().unwrap().path_resolutions, 1);
+
+    drop(first_registration);
+    drop(second_registration);
+    watcher.send_paths_for_test(vec![changed.clone()]).await;
+    assert_eq!(second_rx.recv().await.unwrap().paths, vec![changed.clone()]);
+    assert_eq!(watcher.state.read().unwrap().path_resolutions, 2);
+
+    drop(duplicate);
+    watcher.send_paths_for_test(vec![changed]).await;
+    assert_eq!(watcher.state.read().unwrap().path_resolutions, 2);
+}
+
+#[tokio::test]
+async fn deletion_batch_switches_to_fallback_before_handling_parent_event() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let root = directory.path().canonicalize().expect("canonical root");
+    let file = root.join("SKILL.md");
+    std::fs::write(&file, "skill").expect("write file");
+    let watcher = Arc::new(FileWatcher::noop());
+    let (subscriber, mut rx) = watcher.add_subscriber();
+    let _registration = subscriber.register_path(file.clone(), false);
+    std::fs::remove_file(&file).expect("remove file");
+
+    watcher.send_paths_for_test(vec![file.clone(), root]).await;
+    assert_eq!(rx.recv().await.unwrap().paths, vec![file]);
+    assert_eq!(watcher.state.read().unwrap().path_resolutions, 1);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn indexed_events_match_both_symlink_and_canonical_paths() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let root = directory.path().canonicalize().expect("canonical root");
+    let target = root.join("target");
+    let alias = root.join("alias");
+    std::fs::create_dir(&target).expect("target directory");
+    std::os::unix::fs::symlink(&target, &alias).expect("symlink");
+    let watcher = Arc::new(FileWatcher::noop());
+    let (subscriber, mut rx) = watcher.add_subscriber();
+    let registration = subscriber.register_path(alias.clone(), true);
+
+    for path in [target.join("SKILL.md"), alias.join("SKILL.md")] {
+        watcher.send_paths_for_test(vec![path]).await;
+        assert_eq!(rx.recv().await.unwrap().paths, vec![alias.join("SKILL.md")]);
+    }
+    drop(subscriber);
+    watcher.send_paths_for_test(vec![target, alias]).await;
+    assert_eq!(rx.recv().await, None);
+    assert_eq!(watcher.state.read().unwrap().path_resolutions, 2);
+    drop(registration);
+}
+
+#[tokio::test]
 async fn non_recursive_watch_ignores_grandchildren() {
     let watcher = Arc::new(FileWatcher::noop());
     let (subscriber, rx) = watcher.add_subscriber();
