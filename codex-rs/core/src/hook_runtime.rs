@@ -63,6 +63,7 @@ use crate::context::HookAdditionalContext;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::event_mapping::parse_turn_item;
 use crate::guardian::GuardianReviewContext;
+use crate::hook_environment_executor::with_captured_environment_hooks;
 use crate::hook_environment_executor::with_environment_hooks;
 use crate::hook_environment_executor::with_tool_environment_hooks;
 use crate::session::TurnInput;
@@ -455,7 +456,7 @@ pub(crate) async fn run_turn_stop_hooks(
 }
 
 #[instrument(level = "trace", skip_all)]
-pub(crate) async fn run_session_end_hooks(sess: &Arc<Session>) {
+pub(crate) async fn run_session_end_hooks(sess: &Arc<Session>, hooks: Arc<codex_hooks::Hooks>) {
     // Building a turn can read plugins and skills from a remote executor. Check
     // the captured hook declarations before spending any of the shutdown deadline.
     let environments = sess.services.turn_environments.snapshot_now();
@@ -466,12 +467,12 @@ pub(crate) async fn run_session_end_hooks(sess: &Arc<Session>) {
             .session_end
             .is_empty()
     });
-    if !has_environment_end_hooks && sess.hooks().await.preview_session_end().is_empty() {
+    if !has_environment_end_hooks && hooks.preview_session_end().is_empty() {
         return;
     }
 
     let turn_context = sess.new_default_turn().await;
-    let hooks = with_environment_hooks(sess, &turn_context, &environments).await;
+    let hooks = with_captured_environment_hooks(&hooks, sess, &turn_context, &environments, &[]);
     let preview_runs = hooks.preview_session_end();
     if preview_runs.is_empty() {
         return;
@@ -515,9 +516,16 @@ pub(crate) async fn run_turn_interrupt_hooks(
         .map(|step| step.executor_hook_sources.clone())
         .unwrap_or_default();
     let has_executor_hooks = !executor_hook_sources.is_empty();
+    let captured_hooks = sess.services.hooks.snapshot();
     let hooks = match last_known_step_context.as_deref() {
-        Some(step) => with_environment_hooks(sess, &step.turn, &step.environments).await,
-        None => (*sess.hooks().await).clone(),
+        Some(step) => with_captured_environment_hooks(
+            &captured_hooks,
+            sess,
+            &step.turn,
+            &step.environments,
+            &[],
+        ),
+        None => (*captured_hooks).clone(),
     }
     .with_executor_hooks(executor_hook_sources);
     let preview_runs = hooks.preview_interrupt();
