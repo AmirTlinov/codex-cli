@@ -10037,6 +10037,10 @@ async fn mcp_refresh_detects_shared_auth_manager_changes() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "Hold the state lock to test cancellation while MCP refresh waits for it"
+)]
 async fn mcp_hook_refreshes_auth_within_its_deadline() {
     use codex_hooks::HookMcpExecutor;
     let (session, _) = make_session_and_context().await;
