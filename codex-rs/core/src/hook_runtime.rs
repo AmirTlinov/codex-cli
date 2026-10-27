@@ -456,9 +456,12 @@ pub(crate) async fn run_turn_stop_hooks(
 }
 
 #[instrument(level = "trace", skip_all)]
-pub(crate) async fn run_session_end_hooks(sess: &Arc<Session>, hooks: Arc<codex_hooks::Hooks>) {
+pub(crate) async fn run_session_end_hooks(sess: &Arc<Session>) {
+    let Some(hooks) = sess.session_end_hooks().await else {
+        return;
+    };
     // Building a turn can read plugins and skills from a remote executor. Check
-    // the captured hook declarations before spending any of the shutdown deadline.
+    // current declarations before preparing an otherwise unused turn.
     let environments = sess.services.turn_environments.snapshot_now();
     let has_environment_end_hooks = environments.turn_environments().any(|environment| {
         !environment
@@ -475,12 +478,6 @@ pub(crate) async fn run_session_end_hooks(sess: &Arc<Session>, hooks: Arc<codex_
     let hooks = with_captured_environment_hooks(&hooks, sess, &turn_context, &environments, &[]);
     let preview_runs = hooks.preview_session_end();
     if preview_runs.is_empty() {
-        return;
-    }
-
-    // SessionEnd is root-only; ThreadSpawn uses SubagentStart/SubagentStop and other subagents
-    // are internal implementation details.
-    if matches!(&turn_context.session_source, SessionSource::SubAgent(_)) {
         return;
     }
 
@@ -516,7 +513,7 @@ pub(crate) async fn run_turn_interrupt_hooks(
         .map(|step| step.executor_hook_sources.clone())
         .unwrap_or_default();
     let has_executor_hooks = !executor_hook_sources.is_empty();
-    let captured_hooks = sess.hooks_for_interrupt().await;
+    let captured_hooks = sess.hooks().await;
     let hooks = match last_known_step_context.as_deref() {
         Some(step) => with_captured_environment_hooks(
             &captured_hooks,
