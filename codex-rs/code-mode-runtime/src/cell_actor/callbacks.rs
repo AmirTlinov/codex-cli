@@ -1,5 +1,6 @@
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 
 use futures::FutureExt;
 use tokio::task::JoinSet;
@@ -45,7 +46,7 @@ pub(super) fn spawn_tool<H: CellHost>(
     tasks: &mut JoinSet<()>,
     host: Arc<H>,
     invocation: CellToolCall,
-    runtime_tx: std::sync::mpsc::Sender<RuntimeCommand>,
+    runtime_tx: mpsc::UnboundedSender<RuntimeCommand>,
     cancellation_token: CancellationToken,
     task_failure_handler: Option<TaskFailureHandler>,
 ) {

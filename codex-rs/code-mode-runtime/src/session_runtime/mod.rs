@@ -141,8 +141,8 @@ impl SessionRuntime {
 
     pub(crate) async fn shutdown(&self) -> Result<(), Error> {
         self.begin_shutdown();
-        // Taking the registry lock ensures every cell that passed the shutdown
-        // check has registered its actor with the tracker before we wait.
+        // Admission registers preparation before releasing the registry lock,
+        // so shutdown waits for both starting cells and their published actors.
         let cells = self.inner.cells.lock().await;
         self.inner.cell_tasks.close();
         drop(cells);
@@ -174,23 +174,34 @@ impl SessionRuntime {
             inner: Arc::clone(&self.inner),
             execution_context: opentelemetry::Context::current(),
         });
-        let mut cells = self.inner.cells.lock().await;
-        if self.inner.shutdown_token.is_cancelled() {
-            return Err(Error::ShuttingDown);
-        }
-        if cells.contains_key(&cell_id) {
-            return Err(Error::DuplicateCell(cell_id));
-        }
+        let _preparing = {
+            let cells = self.inner.cells.lock().await;
+            if self.inner.shutdown_token.is_cancelled() {
+                return Err(Error::ShuttingDown);
+            }
+            if cells.contains_key(&cell_id) {
+                return Err(Error::DuplicateCell(cell_id));
+            }
+            self.inner.cell_tasks.token()
+        };
         let cell_state = Arc::new(CellState::new(self.inner.shutdown_token.child_token()));
-        let (handle, initial_event, task) = CellActor::prepare(
+        let preparation = CellActor::prepare(
             request,
             stored_values,
             host,
             initial_observation,
             cell_state,
             self.inner.task_failure_handler.clone(),
-        )
-        .map_err(Error::Runtime)?;
+        );
+        let (handle, initial_event, task) = tokio::select! {
+            biased;
+            _ = self.inner.shutdown_token.cancelled() => return Err(Error::ShuttingDown),
+            result = preparation => result.map_err(Error::Runtime)?,
+        };
+        let mut cells = self.inner.cells.lock().await;
+        if self.inner.shutdown_token.is_cancelled() {
+            return Err(Error::ShuttingDown);
+        }
         cells.insert(cell_id.clone(), handle);
         let task = self.inner.cell_tasks.spawn(task);
         if let Some(task_failure_handler) = self.inner.task_failure_handler.clone() {
