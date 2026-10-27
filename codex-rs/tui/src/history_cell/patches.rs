@@ -2,6 +2,8 @@
 
 use super::*;
 use crate::line_truncation::truncate_line_with_ellipsis_if_overflow;
+use crate::terminal_hyperlinks::TerminalHyperlink;
+use crate::terminal_hyperlinks::adaptive_wrap_hyperlink_lines;
 use codex_ansi_escape::ansi_escape;
 use codex_utils_path_uri::LegacyAppPathString;
 
@@ -162,6 +164,28 @@ pub(crate) struct ViewImageHistoryCell {
     activity_id: String,
     filename: String,
     path_label: String,
+    image_link: Option<TerminalHyperlink>,
+}
+
+impl ViewImageHistoryCell {
+    /// Only live events from the frontend's host may resolve tool paths locally.
+    pub(crate) fn with_local_image_link(mut self) -> Self {
+        self.image_link = self
+            .image_path()
+            .and_then(|path| crate::local_image_links::resolve_image_path(path.as_path()))
+            .map(|url| TerminalHyperlink::local_image(&url));
+        self
+    }
+
+    fn linked_line(&self, label: &str) -> HyperlinkLine {
+        let mut line = HyperlinkLine::new(Line::from(vec!["• ".dim(), "Viewed image ".bold()]));
+        let mut label = label.replace(['\n', '\r', '\t'], " ").dim();
+        if self.image_link.is_some() {
+            label = label.underlined();
+        }
+        line.push_linked_span(label, self.image_link.as_ref());
+        line
+    }
 }
 
 impl HistoryCell for ViewImageHistoryCell {
@@ -174,25 +198,25 @@ impl HistoryCell for ViewImageHistoryCell {
     }
 
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let line = vec![
-            "• ".dim(),
-            "Viewed image ".bold(),
-            self.filename.replace(['\n', '\r', '\t'], " ").dim(),
-        ]
-        .into();
-        vec![truncate_line_with_ellipsis_if_overflow(
-            line,
-            width as usize,
-        )]
+        visible_lines(self.display_hyperlink_lines(width))
+    }
+
+    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        let mut line = self.linked_line(&self.filename);
+        line.line = truncate_line_with_ellipsis_if_overflow(line.line, usize::from(width));
+        line.clip_hyperlinks_to_width(line.width());
+        vec![line]
     }
 
     fn transcript_lines(&self, width: u16) -> Vec<Line<'static>> {
-        PrefixedWrappedHistoryCell::new(
-            Line::from(vec!["Viewed image ".bold(), self.path_label.clone().dim()]),
-            vec!["• ".dim()],
-            "  ",
+        visible_lines(self.transcript_hyperlink_lines(width))
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        adaptive_wrap_hyperlink_lines(
+            &[self.linked_line(&self.path_label)],
+            RtOptions::new(usize::from(width).max(/*other*/ 1)).subsequent_indent("  ".into()),
         )
-        .display_lines(width)
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
@@ -212,6 +236,7 @@ pub(crate) fn new_view_image_tool_call(
         activity_id: format!("image-view:{id}"),
         filename,
         path_label: path.into_string(),
+        image_link: None,
     }
 }
 

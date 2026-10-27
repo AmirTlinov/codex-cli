@@ -174,10 +174,7 @@ impl MarkdownStyles {
                 "markup.list.unnumbered.markdown",
                 "markup.list.bullet.markdown",
             ]),
-            link: Style::new()
-                .fg(accent_color())
-                .patch(foreground(&["markup.underline.link.markdown"]))
-                .underlined(),
+            link: Style::new().underlined(),
             blockquote: Style::new()
                 .green()
                 .patch(foreground(&["markup.quote.markdown"])),
@@ -2177,7 +2174,7 @@ impl<'a, 'policy> Writer<'a, 'policy> {
 
     fn style_link_label(&mut self, mut span: Span<'static>) -> Span<'static> {
         if let Some(link) = self.link.as_mut()
-            && web_destination(&link.destination).is_some()
+            && link.hyperlink.is_some()
         {
             link.has_visible_label |=
                 !span.content.trim().is_empty() && display_width(&span.content) > 0;

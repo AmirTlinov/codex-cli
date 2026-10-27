@@ -108,6 +108,54 @@ pub(super) fn render(
     buffer
 }
 
+#[test]
+fn viewed_image_filename_opens_its_full_path_in_compact_and_detailed_views() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("property day 中文.png");
+    image::RgbImage::new(/*width*/ 1, /*height*/ 1).save(&path)?;
+    let destination = url::Url::from_file_path(path.canonicalize()?).unwrap();
+    let cells: Vec<Arc<dyn HistoryCell>> = vec![Arc::new(
+        crate::history_cell::new_view_image_tool_call(
+            "view".into(),
+            codex_utils_path_uri::LegacyAppPathString::from_path(&path),
+        )
+        .with_local_image_link(),
+    )];
+    for detailed in [false, true] {
+        let mut view = TranscriptView::default();
+        view.set_presentation(detailed, crate::history_cell::HistoryRenderMode::Rich);
+        let buffer = render(&mut view, &cells, /*width*/ 28, /*height*/ 20);
+        let mut linked_cells = 0;
+        for row in 0..20 {
+            for column in 0..28 {
+                if !buffer[(column, row)]
+                    .symbol()
+                    .contains(destination.as_str())
+                {
+                    continue;
+                }
+                linked_cells += 1;
+                for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
+                    let action = view.handle_mouse(
+                        MouseEvent {
+                            kind: MouseEventKind::Down(MouseButton::Left),
+                            column,
+                            row,
+                            modifiers,
+                        },
+                        &cells,
+                    );
+                    assert!(
+                        matches!(action, Some(ViewAction::OpenLink(url)) if url == destination.as_str())
+                    );
+                }
+            }
+        }
+        assert!(linked_cells > 0);
+    }
+    Ok(())
+}
+
 pub(super) fn text(buffer: &Buffer) -> String {
     (buffer.area.top()..buffer.area.bottom())
         .map(|y| {

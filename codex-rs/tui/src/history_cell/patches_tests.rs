@@ -79,6 +79,58 @@ fn viewed_image_narrow_summary() {
 }
 
 #[test]
+fn viewed_image_links_keep_literal_paths_through_clipping_and_wrapping() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("кадр 100%20 中文.png");
+    image::RgbImage::new(/*width*/ 1, /*height*/ 1).save(&path)?;
+    let expected = Url::from_file_path(path.canonicalize()?).unwrap();
+    let cell = new_view_image_tool_call("view".into(), LegacyAppPathString::from_path(&path))
+        .with_local_image_link();
+
+    for width in [0, 10, 20, 80] {
+        let lines = cell.display_hyperlink_lines(width);
+        assert!(lines[0].width() <= usize::from(width));
+        assert_eq!(lines[0].hyperlinks.is_empty(), width <= 15);
+        for link in &lines[0].hyperlinks {
+            assert_eq!(
+                link.terminal_destination().as_deref(),
+                Some(expected.as_str())
+            );
+            assert_eq!(link.columns.start, 15);
+            assert!(link.columns.end <= lines[0].width());
+        }
+    }
+    for width in [20, 40, 20] {
+        let lines = cell.transcript_hyperlink_lines(width);
+        assert!(
+            lines
+                .iter()
+                .filter(|line| !line.hyperlinks.is_empty())
+                .count()
+                > 1
+        );
+        for link in lines.iter().flat_map(|line| &line.hyperlinks) {
+            assert_eq!(
+                link.terminal_destination().as_deref(),
+                Some(expected.as_str())
+            );
+        }
+    }
+    assert_eq!(
+        cell.raw_lines(),
+        vec![Line::from(format!("Viewed image {}", path.display()))]
+    );
+
+    let untrusted = new_view_image_tool_call("view".into(), LegacyAppPathString::from_path(&path));
+    assert!(
+        untrusted.display_hyperlink_lines(/*width*/ 80)[0]
+            .hyperlinks
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[test]
 fn failed_patch_keeps_diagnostics_beyond_the_legacy_preview() {
     let diagnostics = (1..=12)
         .map(|line| format!("diagnostic line {line}"))

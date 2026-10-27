@@ -861,9 +861,9 @@ fn link() {
     set_syntax_theme(syntect::highlighting::Theme::default());
     let text = render_markdown_text("[Link](https://example.com)");
     let expected = Text::from(Line::from_iter([
-        "Link".fg(accent_color()).underlined(),
+        "Link".underlined(),
         " (".into(),
-        "https://example.com".fg(accent_color()).underlined(),
+        "https://example.com".underlined(),
         ")".into(),
     ]));
     assert_eq!(text, expected);
@@ -873,12 +873,12 @@ fn link() {
 fn web_link_labels_use_link_style_and_preserve_inline_formatting() {
     set_syntax_theme(syntect::highlighting::Theme::default());
     for (label, expected_label) in [
-        ("plain", "plain".fg(accent_color()).underlined()),
-        ("`code`", "code".fg(accent_color()).underlined()),
-        ("**bold**", "bold".fg(accent_color()).bold().underlined()),
+        ("plain", "plain".underlined()),
+        ("`code`", Span::styled("code", MarkdownStyles::default().code).underlined()),
+        ("**bold**", "bold".bold().underlined()),
         (
             "*italic*",
-            "italic".fg(accent_color()).italic().underlined(),
+            "italic".italic().underlined(),
         ),
     ] {
         let text = render_markdown_text(&format!(
@@ -888,7 +888,7 @@ fn web_link_labels_use_link_style_and_preserve_inline_formatting() {
             "before ".into(),
             expected_label,
             " (".into(),
-            "https://example.com".fg(accent_color()).underlined(),
+            "https://example.com".underlined(),
             ")".into(),
             " after ".into(),
             Span::styled("code", MarkdownStyles::default().code),
@@ -918,9 +918,9 @@ fn web_link_labels_keep_link_style_in_wrapped_prose_and_tables() {
             assert_eq!(
                 labels,
                 vec![
-                    "plain".fg(accent_color()).underlined(),
-                    "code".fg(accent_color()).underlined(),
-                    "<b>".fg(accent_color()).underlined()
+                    "plain".underlined(),
+                    Span::styled("code", MarkdownStyles::default().code).underlined(),
+                    "<b>".underlined()
                 ]
             );
         }
@@ -1279,9 +1279,9 @@ fn url_link_shows_destination() {
     set_syntax_theme(syntect::highlighting::Theme::default());
     let text = render_markdown_text("[docs](https://example.com/docs)");
     let expected = Text::from(Line::from_iter([
-        "docs".fg(accent_color()).underlined(),
+        "docs".underlined(),
         " (".into(),
-        "https://example.com/docs".fg(accent_color()).underlined(),
+        "https://example.com/docs".underlined(),
         ")".into(),
     ]));
     assert_eq!(text, expected);

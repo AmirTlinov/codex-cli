@@ -166,6 +166,29 @@ fn explicit_image_links_survive_reflow_and_keep_copy_source() -> anyhow::Result<
 }
 
 #[test]
+fn image_link_labels_do_not_duplicate_the_path_and_empty_labels_stay_visible() -> anyhow::Result<()>
+{
+    let directory = tempfile::tempdir()?;
+    image_in(directory.path(), "property day.png")?;
+    for (label, expected) in [
+        ("View image", "View image"),
+        ("`property day.png`", "property day.png"),
+        ("", "(property day.png)"),
+    ] {
+        let cell =
+            AgentMarkdownCell::new(format!("[{label}](<property day.png>)"), directory.path())
+                .with_local_image_links(/*enabled*/ true);
+        let lines = cell.display_hyperlink_lines(/*width*/ 80);
+        assert_eq!(
+            lines[0].line.to_string().trim_start_matches("• ").trim(),
+            expected
+        );
+        assert!(!lines[0].hyperlinks.is_empty());
+    }
+    Ok(())
+}
+
+#[test]
 fn streamed_image_links_keep_destinations_through_completion() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
     let path = image_in(directory.path(), "My Pictures/кадр 01.png")?;

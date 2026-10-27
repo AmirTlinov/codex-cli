@@ -46,6 +46,11 @@ impl LocalImageLinks {
     }
 }
 
+/// Tool paths are literal filenames, so percent signs must not be decoded as Markdown escapes.
+pub(crate) fn resolve_image_path(path: &Path) -> Option<Url> {
+    resolve_image(Path::new(""), Url::from_file_path(path).ok()?.as_str())
+}
+
 fn is_image(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
