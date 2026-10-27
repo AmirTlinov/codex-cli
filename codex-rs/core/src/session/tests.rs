@@ -1034,6 +1034,7 @@ async fn preview_session_start_hooks(
         },
         thread_id,
         Arc::new(CoreHookMcpExecutor {
+            session: Default::default(),
             runtime: Arc::new(McpRuntime::empty(config.prefix_mcp_tool_names())),
             thread_id,
         }),
@@ -6954,6 +6955,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         },
         thread_id,
         Arc::new(CoreHookMcpExecutor {
+            session: Default::default(),
             runtime: Arc::clone(&mcp_runtime),
             thread_id,
         }),
@@ -7066,7 +7068,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         windows_sandbox_proxy_settings_mode:
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
         multi_agent_version: OnceLock::from(config.multi_agent_version_from_features()),
-        mcp_refresh: McpRefresh::new(),
+        mcp_refresh: McpRefresh::new(0, 0),
         mcp_tool_approval_metadata: Default::default(),
         mcp_elicitation_reviewer_handle: OnceLock::new(),
         mcp_elicitation_lifecycle_handle: OnceLock::new(),
@@ -9248,6 +9250,7 @@ where
         },
         thread_id,
         Arc::new(CoreHookMcpExecutor {
+            session: Default::default(),
             runtime: Arc::clone(&mcp_runtime),
             thread_id,
         }),
@@ -9360,7 +9363,7 @@ where
         windows_sandbox_proxy_settings_mode:
             codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
         multi_agent_version: OnceLock::from(config.multi_agent_version_from_features()),
-        mcp_refresh: McpRefresh::new(),
+        mcp_refresh: McpRefresh::new(0, 0),
         mcp_tool_approval_metadata: Default::default(),
         mcp_elicitation_reviewer_handle: OnceLock::new(),
         mcp_elicitation_lifecycle_handle: OnceLock::new(),
@@ -10031,6 +10034,50 @@ async fn mcp_refresh_detects_shared_auth_manager_changes() {
             .mcp_runtime
             .current_auth_matches(session.services.auth_manager.auth_cached().as_ref())
     );
+}
+
+#[tokio::test]
+async fn mcp_hook_refreshes_auth_within_its_deadline() {
+    use codex_hooks::HookMcpExecutor;
+    let (session, _) = make_session_and_context().await;
+    let session = Arc::new(session);
+    session.refresh_mcp_if_dirty().await;
+    let executor = CoreHookMcpExecutor {
+        runtime: Arc::clone(&session.services.mcp_runtime),
+        thread_id: session.thread_id(),
+        session: std::sync::OnceLock::from(Arc::downgrade(&session)),
+    };
+    session
+        .services
+        .auth_manager
+        .logout()
+        .await
+        .expect("logout");
+    let call = |timeout| codex_hooks::HookMcpCall {
+        server: "missing".to_string(),
+        tool: "test".to_string(),
+        environment_id: None,
+        metadata: None,
+        input: Default::default(),
+        timeout,
+    };
+    let state = session.state.lock().await;
+    let error = executor
+        .execute(call(Duration::from_millis(10)))
+        .await
+        .err()
+        .expect("refresh times out");
+    assert!(error.to_string().contains("MCP hook timed out"));
+    drop(state);
+    assert!(session.mcp_refresh.is_pending());
+    assert!(
+        executor
+            .execute(call(Duration::from_secs(5)))
+            .await
+            .is_err()
+    );
+    assert!(session.services.mcp_runtime.current_auth_matches(None));
+    assert!(!session.mcp_refresh.is_pending());
 }
 
 /// A ready registry entry alone must not expose roots outside the turn's environment selection.
