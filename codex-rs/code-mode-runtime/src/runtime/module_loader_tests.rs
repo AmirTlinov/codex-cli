@@ -1,7 +1,6 @@
 //! Checks that tool response delivery preserves live results without rooting discarded values.
 
 use std::collections::HashMap;
-use std::sync::mpsc as std_mpsc;
 
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -20,7 +19,7 @@ fn discarded_tool_response_is_collectible_before_cell_ends() {
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
     let (event_tx, _event_rx) = mpsc::unbounded_channel();
-    let (runtime_command_tx, _runtime_command_rx) = std_mpsc::channel();
+    let (runtime_command_tx, _runtime_command_rx) = mpsc::unbounded_channel();
     scope.set_slot(RuntimeState {
         event_tx,
         pending_tool_calls: HashMap::new(),

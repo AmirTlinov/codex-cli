@@ -3,7 +3,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::mpsc as std_mpsc;
 
 use codex_code_mode_protocol::CodeModeToolKind;
 use codex_code_mode_protocol::EnabledToolMetadata;
@@ -96,7 +95,7 @@ clearTimeout(earlyTimer); setTimeout(() => {}, 60000);
         let context = v8::Context::new(scope, Default::default());
         let scope = &mut v8::ContextScope::new(scope, context);
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-        let (runtime_command_tx, _runtime_command_rx) = std_mpsc::channel();
+        let (runtime_command_tx, _runtime_command_rx) = mpsc::unbounded_channel();
         let tool_name = ToolName::plain("echo");
         globals::install_globals(
             scope,

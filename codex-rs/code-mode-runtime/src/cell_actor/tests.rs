@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
 
 use codex_code_mode_protocol::ExecuteRequest;
@@ -90,15 +89,15 @@ struct CellActorHarness {
     yield_signal: CancellationToken,
     initial_event_rx: oneshot::Receiver<Result<CellEvent, CellError>>,
     task: tokio::task::JoinHandle<()>,
-    runtime_control_rx: std_mpsc::Receiver<RuntimeControlCommand>,
+    runtime_control_rx: mpsc::UnboundedReceiver<RuntimeControlCommand>,
     _runtime_event_rx: mpsc::UnboundedReceiver<RuntimeEvent>,
 }
 
-fn spawn_cell_actor_harness(initial_observe_mode: ObserveMode) -> CellActorHarness {
-    spawn_cell_actor_harness_with_host(initial_observe_mode, Arc::new(TestHost))
+async fn spawn_cell_actor_harness(initial_observe_mode: ObserveMode) -> CellActorHarness {
+    spawn_cell_actor_harness_with_host(initial_observe_mode, Arc::new(TestHost)).await
 }
 
-fn spawn_cell_actor_harness_with_host<H: CellHost>(
+async fn spawn_cell_actor_harness_with_host<H: CellHost>(
     initial_observe_mode: ObserveMode,
     host: Arc<H>,
 ) -> CellActorHarness {
@@ -107,9 +106,10 @@ fn spawn_cell_actor_harness_with_host<H: CellHost>(
         host,
         /*task_failure_handler*/ None,
     )
+    .await
 }
 
-fn spawn_cell_actor_harness_with_host_and_failure_handler<H: CellHost>(
+async fn spawn_cell_actor_harness_with_host_and_failure_handler<H: CellHost>(
     initial_observe_mode: ObserveMode,
     host: Arc<H>,
     task_failure_handler: Option<TaskFailureHandler>,
@@ -129,10 +129,12 @@ fn spawn_cell_actor_harness_with_host_and_failure_handler<H: CellHost>(
         },
         runtime_event_tx,
         PendingRuntimeMode::PauseUntilResumed,
+        CancellationToken::new(),
         /*task_failure_handler*/ None,
     )
+    .await
     .unwrap();
-    let (runtime_control_tx, runtime_control_rx) = std_mpsc::channel();
+    let (runtime_control_tx, runtime_control_rx) = mpsc::unbounded_channel();
     let cell_state = Arc::new(CellState::new(CancellationToken::new()));
     let handle = CellHandle::new(command_tx, Arc::clone(&cell_state));
     let yield_signal = CancellationToken::new();
@@ -141,7 +143,10 @@ fn spawn_cell_actor_harness_with_host_and_failure_handler<H: CellHost>(
         CellContext {
             runtime_tx,
             runtime_control_tx,
-            runtime_terminate_handle,
+            runtime_owner: RuntimeOwner {
+                termination: runtime_terminate_handle,
+                cancellation: cell_state.cancellation_token(),
+            },
             cell_state,
         },
         event_rx,
@@ -165,6 +170,61 @@ fn spawn_cell_actor_harness_with_host_and_failure_handler<H: CellHost>(
 }
 
 #[tokio::test]
+async fn dropping_an_unpolled_actor_stops_its_running_javascript() {
+    let cancellation = CancellationToken::new();
+    let (events, mut runtime_events) = mpsc::unbounded_channel();
+    let (runtime_tx, runtime_control_tx, termination) = spawn_runtime(
+        HashMap::new(),
+        ExecuteRequest {
+            tool_call_id: "abandoned".to_string(),
+            enabled_tools: Vec::new(),
+            source: "while (true) {}".to_string(),
+            yield_time_ms: None,
+            max_output_tokens: None,
+        },
+        events,
+        PendingRuntimeMode::PauseUntilResumed,
+        cancellation.clone(),
+        None,
+    )
+    .await
+    .expect("prepare runtime");
+    assert!(matches!(
+        runtime_events.recv().await,
+        Some(RuntimeEvent::Started)
+    ));
+    let (_events, event_rx) = mpsc::unbounded_channel();
+    let (_commands, command_rx) = mpsc::unbounded_channel();
+    let (response_tx, _response_rx) = oneshot::channel();
+    let actor = run_cell(
+        Arc::new(TestHost),
+        CellContext {
+            runtime_tx,
+            runtime_control_tx,
+            runtime_owner: RuntimeOwner {
+                termination,
+                cancellation: cancellation.clone(),
+            },
+            cell_state: Arc::new(CellState::new(cancellation.clone())),
+        },
+        event_rx,
+        command_rx,
+        Observer {
+            observation: ObserveMode::PendingFrontier.into(),
+            response_tx,
+        },
+        None,
+    );
+    drop(actor);
+    assert!(cancellation.is_cancelled());
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while runtime_events.recv().await.is_some() {}
+    })
+    .await
+    .expect("abandoned V8 execution must release its worker");
+}
+
+#[tokio::test]
 async fn unexpected_runtime_thread_exit_is_reported_to_the_session_owner() {
     let (failure_tx, mut failure_rx) = mpsc::unbounded_channel();
     let harness = spawn_cell_actor_harness_with_host_and_failure_handler(
@@ -173,7 +233,8 @@ async fn unexpected_runtime_thread_exit_is_reported_to_the_session_owner() {
         Some(Arc::new(move |reason| {
             let _ = failure_tx.send(reason);
         })),
-    );
+    )
+    .await;
     drop(harness.event_tx);
 
     assert_eq!(
@@ -195,7 +256,7 @@ async fn unexpected_runtime_thread_exit_is_reported_to_the_session_owner() {
 
 #[tokio::test]
 async fn runtime_thread_panic_remains_a_cell_error_without_owner_supervision() {
-    let harness = spawn_cell_actor_harness(ObserveMode::YieldAfter(Duration::from_secs(60)));
+    let harness = spawn_cell_actor_harness(ObserveMode::YieldAfter(Duration::from_secs(60))).await;
     harness
         .event_tx
         .send(RuntimeEvent::ThreadPanicked)
@@ -225,7 +286,7 @@ async fn wait_for_notification(host: &RecordingHost) {
 
 #[tokio::test]
 async fn yield_timer_preempts_buffered_runtime_output() {
-    let harness = spawn_cell_actor_harness(ObserveMode::YieldAfter(Duration::ZERO));
+    let harness = spawn_cell_actor_harness(ObserveMode::YieldAfter(Duration::ZERO)).await;
     harness.event_tx.send(RuntimeEvent::Started).unwrap();
     harness
         .event_tx
@@ -258,7 +319,7 @@ async fn yield_timer_preempts_buffered_runtime_output() {
 
 #[tokio::test]
 async fn queued_termination_preempts_unobserved_runtime_completion() {
-    let harness = spawn_cell_actor_harness(ObserveMode::YieldAfter(Duration::ZERO));
+    let harness = spawn_cell_actor_harness(ObserveMode::YieldAfter(Duration::ZERO)).await;
     harness.event_tx.send(RuntimeEvent::Started).unwrap();
     harness.event_tx.send(RuntimeEvent::YieldRequested).unwrap();
     harness
@@ -295,7 +356,8 @@ async fn observation_dropped_before_dequeue_does_not_consume_output() {
     let harness = spawn_cell_actor_harness_with_host(
         ObserveMode::YieldAfter(Duration::from_secs(60)),
         Arc::clone(&host),
-    );
+    )
+    .await;
     harness.event_tx.send(RuntimeEvent::YieldRequested).unwrap();
     assert!(harness.initial_event_rx.await.unwrap().is_ok());
 
@@ -351,7 +413,8 @@ async fn dropped_yield_observer_preserves_output_for_the_next_observation() {
     let harness = spawn_cell_actor_harness_with_host(
         ObserveMode::YieldAfter(Duration::from_secs(60)),
         Arc::clone(&host),
-    );
+    )
+    .await;
     harness.event_tx.send(RuntimeEvent::YieldRequested).unwrap();
     assert!(harness.initial_event_rx.await.unwrap().is_ok());
 
@@ -410,10 +473,11 @@ async fn dropped_yield_observer_preserves_output_for_the_next_observation() {
 #[tokio::test]
 async fn dropped_pending_observer_preserves_the_frontier_for_the_next_observation() {
     let host = Arc::new(RecordingHost::default());
-    let harness = spawn_cell_actor_harness_with_host(
+    let mut harness = spawn_cell_actor_harness_with_host(
         ObserveMode::YieldAfter(Duration::from_secs(60)),
         Arc::clone(&host),
-    );
+    )
+    .await;
     harness.event_tx.send(RuntimeEvent::YieldRequested).unwrap();
     assert!(harness.initial_event_rx.await.unwrap().is_ok());
 
@@ -454,7 +518,7 @@ async fn dropped_pending_observer_preserves_the_frontier_for_the_next_observatio
     );
     assert!(matches!(
         harness.runtime_control_rx.try_recv(),
-        Err(std_mpsc::TryRecvError::Empty)
+        Err(mpsc::error::TryRecvError::Empty)
     ));
 
     let termination = harness.handle.terminate();

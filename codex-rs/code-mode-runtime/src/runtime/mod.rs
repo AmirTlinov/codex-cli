@@ -1,16 +1,17 @@
 mod audio;
 mod callbacks;
 mod globals;
+mod instance;
 mod module_loader;
+#[cfg(test)]
+mod scheduling_tests;
 mod timers;
 mod value;
 
 use std::collections::HashMap;
-use std::panic::AssertUnwindSafe;
-use std::panic::catch_unwind;
 use std::sync::Arc;
-use std::sync::mpsc as std_mpsc;
-use std::thread;
+use std::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use codex_code_mode_protocol::CodeModeToolKind;
 use codex_code_mode_protocol::EnabledToolMetadata;
@@ -21,11 +22,15 @@ use codex_protocol::ToolName;
 use serde_json::Value as JsonValue;
 use tokio::sync::mpsc;
 
+use self::instance::RuntimeInstance;
 use crate::TaskFailureHandler;
-use crate::v8_init::ensure_v8_initialized;
+use crate::executor::RuntimeExecutor;
+use crate::v8_init::runtime_executor;
+use tokio::sync::oneshot;
 
 #[derive(Debug)]
 pub(crate) enum RuntimeCommand {
+    Start(String),
     ToolResponse { id: String, result: JsonValue },
     ToolError { id: String, error_text: String },
     TimeoutFired { id: u64 },
@@ -70,83 +75,186 @@ pub(crate) enum RuntimeEvent {
     ThreadPanicked,
 }
 
-pub(crate) fn spawn_runtime(
+pub(crate) async fn spawn_runtime(
     stored_values: HashMap<String, Arc<JsonValue>>,
     request: ExecuteRequest,
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
     pending_mode: PendingRuntimeMode,
+    cancellation: CancellationToken,
     task_failure_handler: Option<TaskFailureHandler>,
 ) -> Result<
     (
-        std_mpsc::Sender<RuntimeCommand>,
-        std_mpsc::Sender<RuntimeControlCommand>,
+        mpsc::UnboundedSender<RuntimeCommand>,
+        mpsc::UnboundedSender<RuntimeControlCommand>,
         v8::IsolateHandle,
     ),
     String,
 > {
-    ensure_v8_initialized()?;
-
-    let (command_tx, command_rx) = std_mpsc::channel();
-    let (control_tx, control_rx) = std_mpsc::channel();
+    let executor = runtime_executor()?;
+    let cancellation = cancellation.child_token();
+    let startup_guard = cancellation.clone().drop_guard();
+    let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+    let (control_tx, mut control_rx) = mpsc::unbounded_channel();
     let runtime_command_tx = command_tx.clone();
-    let (isolate_handle_tx, isolate_handle_rx) = std_mpsc::sync_channel(1);
-    let enabled_tools = request
-        .enabled_tools
-        .into_iter()
-        .map(|definition| EnabledToolMetadata {
-            global_name: normalize_code_mode_identifier(&definition.name),
-            tool_name: definition.tool_name,
-            description: definition.description,
-            kind: definition.kind,
-        })
-        .collect::<Vec<_>>();
+    let (isolate_handle_tx, isolate_handle_rx) = oneshot::channel();
     let config = RuntimeConfig {
         tool_call_id: request.tool_call_id,
-        enabled_tools,
-        source: request.source,
+        enabled_tools: request
+            .enabled_tools
+            .into_iter()
+            .map(|definition| EnabledToolMetadata {
+                global_name: normalize_code_mode_identifier(&definition.name),
+                tool_name: definition.tool_name,
+                description: definition.description,
+                kind: definition.kind,
+            })
+            .collect(),
         stored_values,
     };
-
+    let source = request.source;
     let runtime_handle = tokio::runtime::Handle::current();
-    spawn_supervised_runtime_thread(event_tx.clone(), task_failure_handler, move || {
-        let _runtime_guard = runtime_handle.enter();
-        run_runtime(
-            config,
-            event_tx,
-            command_rx,
-            control_rx,
-            pending_mode,
-            isolate_handle_tx,
-            runtime_command_tx,
-        );
-    });
-
+    executor.spawn(Box::pin(async move {
+        let initialization_events = event_tx.clone();
+        let caller_runtime = runtime_handle.clone();
+        let Some(mut instance) = run_runtime_job(
+            executor,
+            event_tx.clone(),
+            task_failure_handler.clone(),
+            &cancellation,
+            move || {
+                if isolate_handle_tx.is_closed() {
+                    return None;
+                }
+                let _runtime_guard = caller_runtime.enter();
+                let instance =
+                    match RuntimeInstance::new(config, initialization_events, runtime_command_tx) {
+                        Ok(instance) => instance,
+                        Err(error) => {
+                            let _ = isolate_handle_tx.send(Err(error));
+                            return None;
+                        }
+                    };
+                if isolate_handle_tx
+                    .send(Ok(instance.termination_handle()))
+                    .is_err()
+                {
+                    return None;
+                }
+                Some(instance)
+            },
+        )
+        .await
+        .flatten() else {
+            return;
+        };
+        // Start is sent only after the caller receives the termination handle.
+        // If startup is cancelled, closing the control channel disposes the
+        // parked isolate without ever running user code.
+        let mut command = receive_runtime_command(&mut command_rx, &mut control_rx).await;
+        while let Some(next_command) = command {
+            let caller_runtime = runtime_handle.clone();
+            let next = run_runtime_job(
+                executor,
+                event_tx.clone(),
+                task_failure_handler.clone(),
+                &cancellation,
+                move || {
+                    let _runtime_guard = caller_runtime.enter();
+                    instance.advance(next_command)
+                },
+            )
+            .await
+            .flatten();
+            let Some(next) = next else {
+                return;
+            };
+            instance = next;
+            command =
+                next_runtime_command(&event_tx, &mut command_rx, &mut control_rx, pending_mode)
+                    .await;
+        }
+        // Teardown can run V8 cleanup. Keep it off the shared async coordinator.
+        cancellation.cancel();
+        if executor.dispose(instance).await.is_err() {
+            report_runtime_failure(&event_tx, task_failure_handler.as_ref());
+        }
+    }))?;
     let isolate_handle = isolate_handle_rx
-        .recv()
-        .map_err(|_| "failed to initialize code mode runtime".to_string())?;
+        .await
+        .map_err(|_| "failed to initialize code mode runtime".to_string())??;
+    command_tx
+        .send(RuntimeCommand::Start(source))
+        .map_err(|_| "code mode runtime closed during initialization".to_string())?;
+    startup_guard.disarm();
     Ok((command_tx, control_tx, isolate_handle))
 }
 
-fn spawn_supervised_runtime_thread(
+async fn run_runtime_job<T: Send + 'static>(
+    executor: &RuntimeExecutor,
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
     task_failure_handler: Option<TaskFailureHandler>,
-    runtime: impl FnOnce() + Send + 'static,
-) {
-    thread::spawn(move || {
-        if catch_unwind(AssertUnwindSafe(runtime)).is_err() {
-            if let Some(task_failure_handler) = task_failure_handler {
-                task_failure_handler("code-mode V8 runtime thread panicked".to_string());
-            }
-            let _ = event_tx.send(RuntimeEvent::ThreadPanicked);
+    cancellation: &CancellationToken,
+    runtime: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    if cancellation.is_cancelled() {
+        if executor.dispose(runtime).await.is_err() {
+            report_runtime_failure(&event_tx, task_failure_handler.as_ref());
+        }
+        return None;
+    }
+    // Retain ownership until a worker actually starts. Cancelling a queued
+    // Tokio blocking task alone leaves its captures resident behind running JS.
+    let queued = Arc::new(Mutex::new(Some(runtime)));
+    let worker_job = Arc::clone(&queued);
+    let worker_cancellation = cancellation.clone();
+    let mut task = tokio::task::spawn_blocking(move || {
+        let job = worker_job
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if worker_cancellation.is_cancelled() {
+            None
+        } else {
+            job.map(|job| job())
         }
     });
+    let result = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => {
+            let job = queued.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+            if job.is_some() {
+                task.abort();
+                executor.dispose(job).await.map(|()| None)
+            } else {
+                // A running isolate is interrupted through its IsolateHandle.
+                task.await
+            }
+        },
+        result = &mut task => result,
+    };
+    match result {
+        Ok(result) => result,
+        Err(_) => {
+            report_runtime_failure(&event_tx, task_failure_handler.as_ref());
+            None
+        }
+    }
+}
+
+fn report_runtime_failure(
+    event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
+    task_failure_handler: Option<&TaskFailureHandler>,
+) {
+    if let Some(task_failure_handler) = task_failure_handler {
+        task_failure_handler("code-mode V8 runtime thread panicked".to_string());
+    }
+    let _ = event_tx.send(RuntimeEvent::ThreadPanicked);
 }
 
 #[derive(Clone)]
 struct RuntimeConfig {
     tool_call_id: String,
     enabled_tools: Vec<EnabledToolMetadata>,
-    source: String,
     stored_values: HashMap<String, Arc<JsonValue>>,
 }
 
@@ -166,7 +274,7 @@ pub(super) struct RuntimeState {
     next_tool_call_id: u64,
     next_timeout_id: u64,
     tool_call_id: String,
-    runtime_command_tx: std_mpsc::Sender<RuntimeCommand>,
+    runtime_command_tx: mpsc::UnboundedSender<RuntimeCommand>,
     exit_requested: bool,
 }
 
@@ -175,141 +283,47 @@ pub(super) enum CompletionState {
     Completed { error_text: Option<String> },
 }
 
-fn run_runtime(
-    config: RuntimeConfig,
-    event_tx: mpsc::UnboundedSender<RuntimeEvent>,
-    command_rx: std_mpsc::Receiver<RuntimeCommand>,
-    control_rx: std_mpsc::Receiver<RuntimeControlCommand>,
-    pending_mode: PendingRuntimeMode,
-    isolate_handle_tx: std_mpsc::SyncSender<v8::IsolateHandle>,
-    runtime_command_tx: std_mpsc::Sender<RuntimeCommand>,
-) {
-    let isolate = &mut v8::Isolate::new(v8::CreateParams::default());
-    let isolate_handle = isolate.thread_safe_handle();
-    if isolate_handle_tx.send(isolate_handle).is_err() {
-        return;
-    }
-    isolate.set_host_import_module_dynamically_callback(module_loader::dynamic_import_callback);
-
-    v8::scope!(let scope, isolate);
-    let context = v8::Context::new(scope, Default::default());
-    let scope = &mut v8::ContextScope::new(scope, context);
-
-    if let Err(error_text) = globals::install_globals(scope, &config.enabled_tools) {
-        send_result(&event_tx, HashMap::new(), Some(error_text));
-        return;
-    }
-
-    scope.set_slot(RuntimeState {
-        event_tx: event_tx.clone(),
-        pending_tool_calls: HashMap::new(),
-        pending_timeouts: HashMap::new(),
-        stored_values: config.stored_values,
-        stored_value_writes: HashMap::new(),
-        enabled_tools: config
-            .enabled_tools
-            .into_iter()
-            .map(|tool| ToolCallbackMetadata {
-                tool_name: tool.tool_name,
-                kind: tool.kind,
-            })
-            .collect(),
-        next_tool_call_id: 1,
-        next_timeout_id: 1,
-        tool_call_id: config.tool_call_id,
-        runtime_command_tx,
-        exit_requested: false,
-    });
-
-    let _ = event_tx.send(RuntimeEvent::Started);
-
-    let pending_promise = match module_loader::evaluate_main_module(scope, &config.source) {
-        Ok(pending_promise) => pending_promise,
-        Err(error_text) => {
-            send_scope_result(scope, &event_tx, Some(error_text));
-            return;
-        }
-    };
-
-    match module_loader::completion_state(scope, pending_promise.as_ref()) {
-        CompletionState::Completed { error_text } => {
-            send_scope_result(scope, &event_tx, error_text);
-            return;
-        }
-        CompletionState::Pending => {}
-    }
-
-    let mut pending_promise = pending_promise;
-    while let Some(command) =
-        next_runtime_command(&event_tx, &command_rx, &control_rx, pending_mode)
-    {
-        match command {
-            RuntimeCommand::Terminate => break,
-            RuntimeCommand::ToolResponse { id, result } => {
-                if let Err(error_text) =
-                    module_loader::resolve_tool_response(scope, &id, Ok(result))
-                {
-                    send_scope_result(scope, &event_tx, Some(error_text));
-                    return;
-                }
-            }
-            RuntimeCommand::ToolError { id, error_text } => {
-                if let Err(runtime_error) =
-                    module_loader::resolve_tool_response(scope, &id, Err(error_text))
-                {
-                    send_scope_result(scope, &event_tx, Some(runtime_error));
-                    return;
-                }
-            }
-            RuntimeCommand::TimeoutFired { id } => {
-                if let Err(runtime_error) = timers::invoke_timeout_callback(scope, id) {
-                    send_scope_result(scope, &event_tx, Some(runtime_error));
-                    return;
-                }
-            }
-            RuntimeCommand::ObservePendingFrontier => {}
-        }
-
-        scope.perform_microtask_checkpoint();
-        match module_loader::completion_state(scope, pending_promise.as_ref()) {
-            CompletionState::Completed { error_text } => {
-                send_scope_result(scope, &event_tx, error_text);
-                return;
-            }
-            CompletionState::Pending => {}
-        }
-
-        if let Some(promise) = pending_promise.as_ref() {
-            let promise = v8::Local::new(scope, promise);
-            if promise.state() != v8::PromiseState::Pending {
-                pending_promise = None;
-            }
-        }
-    }
-}
-
-fn next_runtime_command(
+async fn next_runtime_command(
     event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
-    command_rx: &std_mpsc::Receiver<RuntimeCommand>,
-    control_rx: &std_mpsc::Receiver<RuntimeControlCommand>,
+    command_rx: &mut mpsc::UnboundedReceiver<RuntimeCommand>,
+    control_rx: &mut mpsc::UnboundedReceiver<RuntimeControlCommand>,
     pending_mode: PendingRuntimeMode,
 ) -> Option<RuntimeCommand> {
     loop {
         match command_rx.try_recv() {
             Ok(command) => return Some(command),
-            Err(std_mpsc::TryRecvError::Disconnected) => return None,
-            Err(std_mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::error::TryRecvError::Disconnected) => return None,
+            Err(mpsc::error::TryRecvError::Empty) => {}
         }
-
         let _ = event_tx.send(RuntimeEvent::Pending);
         match pending_mode {
             #[cfg(test)]
-            PendingRuntimeMode::Continue => return command_rx.recv().ok(),
-            PendingRuntimeMode::PauseUntilResumed => match control_rx.recv().ok()? {
-                RuntimeControlCommand::Continue => return command_rx.recv().ok(),
+            PendingRuntimeMode::Continue => {
+                return receive_runtime_command(command_rx, control_rx).await;
+            }
+            PendingRuntimeMode::PauseUntilResumed => match control_rx.recv().await? {
+                RuntimeControlCommand::Continue => {
+                    return receive_runtime_command(command_rx, control_rx).await;
+                }
                 RuntimeControlCommand::Resume => continue,
                 RuntimeControlCommand::Terminate => return Some(RuntimeCommand::Terminate),
             },
+        }
+    }
+}
+
+async fn receive_runtime_command(
+    command_rx: &mut mpsc::UnboundedReceiver<RuntimeCommand>,
+    control_rx: &mut mpsc::UnboundedReceiver<RuntimeControlCommand>,
+) -> Option<RuntimeCommand> {
+    loop {
+        tokio::select! {
+            biased;
+            control = control_rx.recv() => match control? {
+                RuntimeControlCommand::Terminate => return Some(RuntimeCommand::Terminate),
+                RuntimeControlCommand::Continue | RuntimeControlCommand::Resume => {}
+            },
+            command = command_rx.recv() => return command,
         }
     }
 }
@@ -348,13 +362,14 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tokio::sync::mpsc;
 
+    use tokio_util::sync::CancellationToken;
+
     use super::ExecuteRequest;
     use super::PendingRuntimeMode;
     use super::RuntimeCommand;
     use super::RuntimeControlCommand;
     use super::RuntimeEvent;
     use super::spawn_runtime;
-    use super::spawn_supervised_runtime_thread;
     use crate::FunctionCallOutputContentItem;
 
     fn execute_request(source: &str) -> ExecuteRequest {
@@ -381,45 +396,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runtime_thread_panic_before_initialization_is_reported_directly() {
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
-        drop(event_rx);
-        let (failure_tx, mut failure_rx) = mpsc::unbounded_channel();
-        spawn_supervised_runtime_thread(
-            event_tx,
-            Some(std::sync::Arc::new(move |reason| {
-                let _ = failure_tx.send(reason);
-            })),
-            || panic!("runtime thread panic probe"),
-        );
-
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(1), failure_rx.recv())
-                .await
-                .expect("runtime failure timeout")
-                .expect("runtime failure"),
-            "code-mode V8 runtime thread panicked"
-        );
-    }
-
-    #[tokio::test]
-    async fn runtime_thread_panic_is_forwarded_without_owner_supervision() {
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-        spawn_supervised_runtime_thread(
-            event_tx,
-            /*task_failure_handler*/ None,
-            || panic!("runtime thread panic probe"),
-        );
-
-        assert!(matches!(
-            tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
-                .await
-                .expect("runtime panic event timeout"),
-            Some(RuntimeEvent::ThreadPanicked)
-        ));
-    }
-
-    #[tokio::test]
     async fn terminate_execution_stops_javascript() {
         for source in [
             r#"notify("started"); while (true) {}"#,
@@ -443,8 +419,10 @@ text("continued after cancellation");
                 execute_request(source),
                 event_tx,
                 PendingRuntimeMode::Continue,
+                CancellationToken::new(),
                 /*task_failure_handler*/ None,
             )
+            .await
             .unwrap();
 
             let started_event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
@@ -494,8 +472,10 @@ await new Promise(() => {});
             ),
             event_tx,
             PendingRuntimeMode::PauseUntilResumed,
+            CancellationToken::new(),
             /*task_failure_handler*/ None,
         )
+        .await
         .unwrap();
 
         assert!(matches!(
@@ -564,8 +544,10 @@ setTimeout(() => text("late"), 3_600_000);
             ),
             event_tx,
             PendingRuntimeMode::Continue,
+            CancellationToken::new(),
             /*task_failure_handler*/ None,
         )
+        .await
         .unwrap();
 
         loop {
