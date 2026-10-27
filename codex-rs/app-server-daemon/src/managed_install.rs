@@ -18,16 +18,16 @@ use tokio::time::timeout;
 /// Preserve legacy launch state, including logs left after a daemon is stopped;
 /// settings, installer selections, and lock files alone do not prove a prior launch.
 pub(crate) fn package_root(codex_home: &Path) -> PathBuf {
-    let dedicated = codex_home.join("packages/app-server-daemon");
+    let dedicated = codex_home.join("packages/codex-mine-daemon");
     if !matches!(dedicated.join("current").symlink_metadata(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound)
     {
         return dedicated;
     }
-    let state = codex_home.join("app-server-daemon");
+    let state = codex_home.join("codex-mine-daemon");
     for (package, artifacts) in [
         (
-            "app-server-daemon",
+            "codex-mine-daemon",
             [
                 crate::DAEMON_PID_FILE_NAME,
                 "daemon.stderr.log",
@@ -62,7 +62,7 @@ pub(crate) fn managed_codex_bin(codex_home: &Path) -> PathBuf {
     let packaged = current.join("bin").join(managed_codex_file_name());
     let legacy = current.join(managed_codex_file_name());
     if packaged.is_file()
-        || !legacy.is_file() && (cfg!(windows) || root.ends_with("app-server-daemon"))
+        || !legacy.is_file() && (cfg!(windows) || root.ends_with("codex-mine-daemon"))
     {
         packaged
     } else {

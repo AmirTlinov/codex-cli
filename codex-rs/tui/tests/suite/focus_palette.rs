@@ -593,7 +593,7 @@ fn no_daemon_skips_startup_and_discovery() -> Result<()> {
             !terminal
                 ._codex_home
                 .path()
-                .join("app-server-daemon")
+                .join("codex-mine-daemon")
                 .exists()
         );
         if let Some(listener) = listener {
@@ -622,7 +622,7 @@ fn auto_daemon_start_failure_exits_with_manual_fallback_hint() -> Result<()> {
         contents.replace("features.daemon_auto_start = false\n", ""),
     )?;
     // An incomplete selected package must fail without installing a replacement.
-    std::fs::create_dir_all(home.path().join("packages/app-server-daemon/current"))?;
+    std::fs::create_dir_all(home.path().join("packages/codex-mine-daemon/current"))?;
     let mut terminal = PtyCodex::start(
         workspace.path(),
         home,

@@ -49,7 +49,7 @@ fn winget_package_starts_and_reselects_daemon() -> Result<()> {
         &voice_bytes,
     )?;
 
-    let current = home.join("packages/app-server-daemon/current");
+    let current = home.join("packages/codex-mine-daemon/current");
     // Drop before temp so assertion failures also release the managed executable.
     struct StopDaemon(Command);
     impl Drop for StopDaemon {

@@ -1,6 +1,42 @@
 use pretty_assertions::assert_eq;
 
 #[test]
+fn personal_daemon_does_not_adopt_the_official_installation() -> std::io::Result<()> {
+    let home = tempfile::TempDir::new()?;
+    for package in ["standalone", "app-server-daemon"] {
+        let bin = home
+            .path()
+            .join("packages")
+            .join(package)
+            .join("current/bin");
+        std::fs::create_dir_all(&bin)?;
+        std::fs::write(bin.join(super::managed_codex_file_name()), b"official")?;
+    }
+    let state = home.path().join("app-server-daemon");
+    std::fs::create_dir_all(&state)?;
+    for name in [
+        "app-server.pid",
+        "app-server.stderr.log",
+        "daemon.pid",
+        "daemon.stderr.log",
+    ] {
+        std::fs::write(state.join(name), b"official")?;
+    }
+    assert_eq!(
+        super::managed_codex_bin(home.path()),
+        home.path()
+            .join("packages/codex-mine-daemon/current/bin")
+            .join(super::managed_codex_file_name())
+    );
+    assert_eq!(
+        codex_app_server_transport::app_server_control_socket_path(home.path())?.as_path(),
+        home.path()
+            .join("codex-mine-control/app-server-control.sock")
+    );
+    Ok(())
+}
+
+#[test]
 fn discovers_package_and_legacy_installs() {
     let home = tempfile::TempDir::new().expect("home");
     let current = home.path().join("packages/standalone/current");
@@ -8,12 +44,12 @@ fn discovers_package_and_legacy_installs() {
     assert_eq!(
         super::managed_codex_bin(home.path()),
         home.path()
-            .join("packages/app-server-daemon/current/bin")
+            .join("packages/codex-mine-daemon/current/bin")
             .join(super::managed_codex_file_name())
     );
     std::fs::create_dir_all(&current).expect("current directory");
     std::fs::write(&legacy, b"legacy").expect("legacy executable");
-    let state = home.path().join("app-server-daemon");
+    let state = home.path().join("codex-mine-daemon");
     std::fs::create_dir(&state).unwrap();
     for name in ["settings.json", "daemon.lock", "app-server.pid.lock"] {
         std::fs::write(state.join(name), b"").unwrap();
@@ -21,7 +57,7 @@ fn discovers_package_and_legacy_installs() {
     // A CLI install and a previous stop/status operation do not establish ownership.
     assert_eq!(
         super::package_root(home.path()),
-        home.path().join("packages/app-server-daemon")
+        home.path().join("packages/codex-mine-daemon")
     );
     std::fs::write(state.join("app-server.stderr.log"), b"").unwrap();
     assert_eq!(super::managed_codex_bin(home.path()), legacy);
@@ -45,18 +81,18 @@ fn discovers_package_and_legacy_installs() {
     std::fs::write(state.join("daemon.pid"), b"running dedicated daemon").unwrap();
     assert_eq!(
         super::package_root(home.path()),
-        home.path().join("packages/app-server-daemon")
+        home.path().join("packages/codex-mine-daemon")
     );
     std::fs::remove_file(state.join("daemon.pid")).unwrap();
     std::fs::write(state.join("daemon.stderr.log"), b"").unwrap();
     assert_eq!(
         super::package_root(home.path()),
-        home.path().join("packages/app-server-daemon")
+        home.path().join("packages/codex-mine-daemon")
     );
 
     #[cfg(unix)]
     {
-        let dedicated = home.path().join("packages/app-server-daemon");
+        let dedicated = home.path().join("packages/codex-mine-daemon");
         std::fs::write(&dedicated, b"not a directory").expect("unreadable selection");
         assert_eq!(super::package_root(home.path()), dedicated);
     }
@@ -66,7 +102,7 @@ fn discovers_package_and_legacy_installs() {
 #[test]
 fn updater_only_runs_for_stable_installer_owned_releases() {
     let home = tempfile::TempDir::new().expect("home");
-    let state = home.path().join("app-server-daemon");
+    let state = home.path().join("codex-mine-daemon");
     std::fs::create_dir(&state).unwrap();
     std::fs::write(state.join("app-server.stderr.log"), b"").unwrap();
     let standalone = home.path().join("packages/standalone");

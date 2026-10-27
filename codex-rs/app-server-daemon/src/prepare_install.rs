@@ -98,7 +98,7 @@ async fn prepare_from_package(
         .and_then(Path::parent)
         .context("daemon settings path has no Codex home")?;
     let previous_root = managed_install::package_root(home);
-    let root = home.join("packages/app-server-daemon");
+    let root = home.join("packages/codex-mine-daemon");
     anyhow::ensure!(
         daemon.managed_codex_bin.starts_with(&previous_root),
         "daemon package location changed; retry the command"
@@ -112,7 +112,7 @@ async fn prepare_from_package(
         }
         if !matches!(root.join("current").symlink_metadata(), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
             || ["daemon.pid", "daemon.stderr.log", "daemon-updater.pid", "daemon-updater.stderr.log"]
-                .iter().any(|name| !matches!(home.join("app-server-daemon").join(name).symlink_metadata(), Err(error) if error.kind() == std::io::ErrorKind::NotFound))
+                .iter().any(|name| !matches!(home.join("codex-mine-daemon").join(name).symlink_metadata(), Err(error) if error.kind() == std::io::ErrorKind::NotFound))
         {
             daemon.ensure_managed_codex_bin()?;
             return Ok(true);

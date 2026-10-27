@@ -428,7 +428,7 @@ fn no_daemon_rejects_agents_and_explicit_remote_targets() -> Result<()> {
             .assert()
             .failure()
             .stderr(contains(expected));
-        assert!(!home.path().join("app-server-daemon").exists());
+        assert!(!home.path().join("codex-mine-daemon").exists());
     }
     Ok(())
 }

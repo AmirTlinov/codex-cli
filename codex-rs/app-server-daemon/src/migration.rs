@@ -32,7 +32,7 @@ pub(super) async fn run(http: &impl InstallerHttp, legacy: &Daemon) -> Result<Up
         .parent()
         .and_then(Path::parent)
         .context("package root has no Codex home")?;
-    let root = home.join("packages/app-server-daemon");
+    let root = home.join("packages/codex-mine-daemon");
     let settings = legacy.load_settings().await?;
     let running = legacy.running_backend_instance(&settings).await?;
     if running.is_none() && client::probe(&legacy.socket_path).await.is_ok() {

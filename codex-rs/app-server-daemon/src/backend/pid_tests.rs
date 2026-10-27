@@ -160,7 +160,7 @@ async fn start_retries_stale_empty_pid_file_under_its_own_lock() {
 async fn legacy_launch_clears_recovery_best_effort() {
     for snapshot_is_directory in [false, true] {
         let home = TempDir::new().expect("temp dir");
-        let state_dir = home.path().join("app-server-daemon");
+        let state_dir = home.path().join("codex-mine-daemon");
         std::fs::create_dir_all(&state_dir).expect("state dir");
         let recovery_file = codex_app_server_transport::daemon_recovery_file_path(home.path());
         if snapshot_is_directory {

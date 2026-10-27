@@ -104,7 +104,7 @@ async fn feedback_upload_recovers_persisted_evidence_and_reports_sqlite_failures
 
     // Terminate HTTPS locally and capture real Sentry envelopes. Never forward uploads.
     let home = tempfile::tempdir()?;
-    let daemon_logs = home.path().join("app-server-daemon");
+    let daemon_logs = home.path().join("codex-mine-daemon");
     std::fs::create_dir(&daemon_logs)?;
     std::fs::write(
         daemon_logs.join("daemon.stderr.log"),

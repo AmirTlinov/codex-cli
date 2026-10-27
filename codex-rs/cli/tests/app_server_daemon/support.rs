@@ -62,7 +62,7 @@ impl TestDaemon {
             standalone.join("current"),
         )?;
         // Model a daemon that was previously launched and is currently stopped.
-        let state = home.path().join("app-server-daemon");
+        let state = home.path().join("codex-mine-daemon");
         std::fs::create_dir(&state)?;
         std::fs::write(state.join("app-server.stderr.log"), b"")?;
         Ok(Self {
@@ -92,7 +92,7 @@ impl TestDaemon {
     }
 
     pub(super) fn pid(&self, name: &str) -> Result<u32> {
-        let record = std::fs::read(self.home.path().join("app-server-daemon").join(name))
+        let record = std::fs::read(self.home.path().join("codex-mine-daemon").join(name))
             .with_context(|| format!("failed to read {name}"))?;
         Ok(serde_json::from_slice::<Value>(&record)?["pid"]
             .as_u64()

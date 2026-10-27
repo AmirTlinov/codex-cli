@@ -38,7 +38,7 @@ fn daemon_junction_can_be_created_retargeted_and_replaced_without_cli_links() {
     let home = tempfile::TempDir::new().unwrap();
     let root = home
         .path()
-        .join("home & 100% ready!/packages/app-server-daemon");
+        .join("home & 100% ready!/packages/codex-mine-daemon");
     for (version, native_denied) in [("first", true), ("second", false), ("third", true)] {
         let release = root.join("releases").join(version);
         std::fs::create_dir_all(&release).unwrap();

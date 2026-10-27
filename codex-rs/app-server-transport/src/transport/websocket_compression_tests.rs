@@ -81,7 +81,7 @@ async fn local_socket_compression_negotiates_and_retains_history() -> Result<(),
     for compression in [WebSocketCompression::Plain, WebSocketCompression::Zstd] {
         let temp_dir = tempfile::TempDir::new()?;
         let socket_path = AbsolutePathBuf::from_absolute_path(
-            temp_dir.path().join("app-server-control").join("rpc.sock"),
+            temp_dir.path().join("codex-mine-control").join("rpc.sock"),
         )?;
         let (transport_event_tx, mut events) = mpsc::channel(CHANNEL_CAPACITY);
         let shutdown = CancellationToken::new();

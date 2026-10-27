@@ -141,7 +141,7 @@ pub(crate) async fn prune(daemon: &Daemon, root: &Path, settings: &DaemonSetting
     let releases = root.join("releases");
     let mount = owned_mount(&home.join("packages"))?;
     anyhow::ensure!(
-        root == home.join("packages/app-server-daemon")
+        root == home.join("packages/codex-mine-daemon")
             && owned_mount(root)? == mount
             && owned_mount(&releases)? == mount
             && root.join(".migration-current").symlink_metadata().is_err(),

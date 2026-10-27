@@ -222,7 +222,7 @@ async fn explicit_remote_control_startup_fails_when_disabled_by_requirements() -
     let managed_config_path = codex_home.path().join("managed_config.toml");
     let socket_path = codex_home
         .path()
-        .join("app-server-control")
+        .join("codex-mine-control")
         .join("app-server.sock");
     let transport =
         AppServerTransport::from_listen_url(&format!("unix://{}", socket_path.display()))?;
@@ -717,7 +717,7 @@ async fn rpc_updates_durable_preference_but_ephemeral_does_not() -> Result<()> {
     assert!(
         !codex_home
             .path()
-            .join("app-server-daemon/settings.json")
+            .join("codex-mine-daemon/settings.json")
             .exists()
     );
 
@@ -734,7 +734,7 @@ async fn managed_rpc_persists_unless_daemon_lock_is_busy() -> Result<()> {
     let home = TempDir::new()?;
     let mut backend = BlockingRemoteControlBackend::start(home.path()).await?;
     let socket = home.path().join("control/server.sock");
-    let settings_file = home.path().join("app-server-daemon/settings.json");
+    let settings_file = home.path().join("codex-mine-daemon/settings.json");
     let _server = spawn_server(home.path(), &socket)?;
     let mut client = connect_daemon_client(
         &socket,

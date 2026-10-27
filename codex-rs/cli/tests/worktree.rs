@@ -279,7 +279,7 @@ trust_level = "trusted"
         }
     }
     let _daemon = if backend == "daemon" {
-        let bin = home.join("packages/app-server-daemon/current/bin");
+        let bin = home.join("packages/codex-mine-daemon/current/bin");
         fs::create_dir_all(&bin)?;
         let managed = bin.join(if cfg!(windows) { "codex.exe" } else { "codex" });
         // Hard links change the executable's ctime and invalidate Rosetta's translation cache.
@@ -288,9 +288,9 @@ trust_level = "trusted"
         #[cfg(not(unix))]
         fs::hard_link(&program, &managed)
             .or_else(|_| codex_utils_cargo_bin::copy_executable(&program, &managed))?;
-        fs::create_dir(home.join("app-server-daemon"))?;
+        fs::create_dir(home.join("codex-mine-daemon"))?;
         fs::write(
-            home.join("app-server-daemon/settings.json"),
+            home.join("codex-mine-daemon/settings.json"),
             r#"{"shutdownGraceSeconds":0,"updater":{"autoUpdateEnabled":false}}"#,
         )?;
         let mut daemon_stop = Command::new(&program);

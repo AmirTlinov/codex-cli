@@ -64,7 +64,7 @@ fn managed_daemon_restarts_from_deleted_working_directory() -> Result<()> {
     let updater_socket = daemon
         .home
         .path()
-        .join("app-server-daemon/app-server-updater.sock");
+        .join("codex-mine-daemon/app-server-updater.sock");
     let deadline = Instant::now() + Duration::from_secs(30);
     while std::os::unix::net::UnixStream::connect(&updater_socket).is_err() {
         ensure!(
@@ -82,11 +82,11 @@ fn bootstrap_updater_is_ready_in_deep_codex_home() -> Result<()> {
     let deep_home = tempfile::Builder::new()
         .prefix(&"deep-codex-home-".repeat(8))
         .tempdir_in("/tmp")?;
-    for name in ["packages", "app-server-daemon"] {
+    for name in ["packages", "codex-mine-daemon"] {
         std::fs::rename(daemon.home.path().join(name), deep_home.path().join(name))?;
     }
     daemon.home = deep_home;
-    let state = daemon.home.path().join("app-server-daemon");
+    let state = daemon.home.path().join("codex-mine-daemon");
     std::fs::write(
         state.join("settings.json"),
         br#"{"shutdownGraceSeconds":0}"#,
@@ -105,7 +105,7 @@ fn bootstrap_updater_is_ready_in_deep_codex_home() -> Result<()> {
 #[test]
 fn bootstrap_reports_updater_bind_failure() -> Result<()> {
     let daemon = TestDaemon::new()?;
-    let state = daemon.home.path().join("app-server-daemon");
+    let state = daemon.home.path().join("codex-mine-daemon");
     std::fs::write(
         state.join("settings.json"),
         br#"{"shutdownGraceSeconds":0}"#,
@@ -125,7 +125,7 @@ fn bootstrap_reports_updater_bind_failure() -> Result<()> {
 #[test]
 fn explicit_restart_applies_feature_overrides_and_preserves_saved_settings() -> Result<()> {
     let daemon = TestDaemon::new()?;
-    let settings_path = daemon.home.path().join("app-server-daemon/settings.json");
+    let settings_path = daemon.home.path().join("codex-mine-daemon/settings.json");
     std::fs::write(
         &settings_path,
         serde_json::to_vec(&serde_json::json!({
@@ -214,7 +214,7 @@ fn managed_identity_survives_locale_and_timezone_changes() -> Result<()> {
     let daemon = TestDaemon::new()?;
     let mut original = Vec::new();
     let mut updater_pid = 0;
-    let pid_file = daemon.home.path().join("app-server-daemon/app-server.pid");
+    let pid_file = daemon.home.path().join("codex-mine-daemon/app-server.pid");
     for (action, locale, timezone, expected_status) in [
         ("start", "C", "UTC0", "started"),
         ("version", "en_AU.UTF-8", "PST8PDT", "running"),
@@ -264,7 +264,7 @@ fn managed_identity_survives_locale_and_timezone_changes() -> Result<()> {
             let updater_socket = daemon
                 .home
                 .path()
-                .join("app-server-daemon/app-server-updater.sock");
+                .join("codex-mine-daemon/app-server-updater.sock");
             let deadline = Instant::now() + Duration::from_secs(30);
             while !updater_socket.exists() {
                 ensure!(Instant::now() < deadline, "updater did not become ready");
@@ -318,7 +318,7 @@ fn package_ownership_check_does_not_start_an_updater() -> Result<()> {
         "ownership check failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let state = daemon.home.path().join("app-server-daemon");
+    let state = daemon.home.path().join("codex-mine-daemon");
     assert!(!state.join("app-server-updater.pid").exists());
     assert!(!state.join("daemon-updater.pid").exists());
     Ok(())
@@ -339,7 +339,7 @@ fn managed_starts_ensure_one_updater_and_recover_a_missing_one() -> Result<()> {
     signal(updater_pid, libc::SIGTERM)?;
     wait_for_exit(updater_pid)?;
     // A replacement updater also upgrades still-verifiable records left by an old CLI.
-    let server_record_path = daemon.home.path().join("app-server-daemon/app-server.pid");
+    let server_record_path = daemon.home.path().join("codex-mine-daemon/app-server.pid");
     let mut legacy: Value = serde_json::from_slice(&std::fs::read(&server_record_path)?)?;
     let native = legacy.as_object_mut().unwrap().remove("processIdentity");
     std::fs::write(&server_record_path, serde_json::to_vec(&legacy)?)?;
@@ -370,7 +370,7 @@ fn managed_starts_ensure_one_updater_and_recover_a_missing_one() -> Result<()> {
         !daemon
             .home
             .path()
-            .join("app-server-daemon/app-server.pid")
+            .join("codex-mine-daemon/app-server.pid")
             .exists()
     );
     assert_eq!(daemon.lifecycle("start")?["status"], "started");
@@ -378,7 +378,7 @@ fn managed_starts_ensure_one_updater_and_recover_a_missing_one() -> Result<()> {
         !daemon
             .home
             .path()
-            .join("packages/app-server-daemon")
+            .join("packages/codex-mine-daemon")
             .exists()
     );
     Ok(())
@@ -387,7 +387,7 @@ fn managed_starts_ensure_one_updater_and_recover_a_missing_one() -> Result<()> {
 #[test]
 fn managed_start_succeeds_when_updater_record_is_invalid() -> Result<()> {
     let daemon = TestDaemon::new()?;
-    let state_dir = daemon.home.path().join("app-server-daemon");
+    let state_dir = daemon.home.path().join("codex-mine-daemon");
     std::fs::create_dir_all(&state_dir)?;
     std::fs::write(state_dir.join("app-server-updater.pid"), "not a PID record")?;
 
@@ -406,7 +406,7 @@ fn wall_clock_shift_keeps_server_and_updater_managed() -> Result<()> {
     let server_pid = daemon.pid("app-server.pid")?;
     let updater_pid = daemon.pid("app-server-updater.pid")?;
     for name in ["app-server.pid", "app-server-updater.pid"] {
-        let path = daemon.home.path().join("app-server-daemon").join(name);
+        let path = daemon.home.path().join("codex-mine-daemon").join(name);
         let mut record: Value = serde_json::from_slice(&std::fs::read(&path)?)?;
         record["processStartTime"] = "historical wall-clock start time".into();
         let replacement = path.with_extension("replacement");
@@ -459,7 +459,7 @@ fn managed_start_keeps_updater_on_marker_mismatch_but_stops_it_for_pin() -> Resu
         !daemon
             .home
             .path()
-            .join("app-server-daemon/app-server-updater.pid")
+            .join("codex-mine-daemon/app-server-updater.pid")
             .exists()
     );
     Ok(())
@@ -470,7 +470,7 @@ fn restart_applies_saved_updater_preference() -> Result<()> {
     let daemon = TestDaemon::new()?;
     assert_eq!(daemon.lifecycle("start")?["status"], "started");
     let updater_pid = daemon.pid("app-server-updater.pid")?;
-    let settings = daemon.home.path().join("app-server-daemon/settings.json");
+    let settings = daemon.home.path().join("codex-mine-daemon/settings.json");
     std::fs::write(
         &settings,
         serde_json::to_vec(&serde_json::json!({
@@ -529,7 +529,7 @@ fn unmanaged_app_server_does_not_launch_updater() -> Result<()> {
         !daemon
             .home
             .path()
-            .join("app-server-daemon/app-server-updater.pid")
+            .join("codex-mine-daemon/app-server-updater.pid")
             .exists()
     );
     Ok(())

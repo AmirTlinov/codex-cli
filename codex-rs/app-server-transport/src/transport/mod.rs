@@ -53,14 +53,15 @@ pub use websocket::start_websocket_acceptor;
 const INTERNAL_ERROR_CODE: i64 = -32603;
 const OVERLOADED_ERROR_CODE: i64 = -32001;
 
-const APP_SERVER_CONTROL_SOCKET_DIR_NAME: &str = "app-server-control";
+// The personal build shares user data while owning a separate backend process.
+const APP_SERVER_CONTROL_SOCKET_DIR_NAME: &str = "codex-mine-control";
 const APP_SERVER_CONTROL_SOCKET_FILE_NAME: &str = "app-server-control.sock";
 const APP_SERVER_STARTUP_LOCK_FILE_NAME: &str = "app-server-startup.lock";
 const DAEMON_RECOVERY_FILE_NAME: &str = "loaded-threads.json";
 
 pub fn daemon_recovery_file_path(codex_home: &Path) -> PathBuf {
     codex_home
-        .join("app-server-daemon")
+        .join("codex-mine-daemon")
         .join(DAEMON_RECOVERY_FILE_NAME)
 }
 
