@@ -2709,7 +2709,7 @@ async fn try_run_sampling_request(
     let effort = sess
         .reasoning_effort_for_request(&step_context.settings, super::RequestEffortUsage::Sampling)
         .await;
-    let hooks = hooks_for_model_request(&sess, &step_context);
+    let hooks = hooks_for_model_request(&sess, &step_context).await;
     let post_mode = hooks.execution_mode_for_event(HookEventName::PostModelRequest);
     let defer_tool_dispatch = post_mode == Some(HookExecutionMode::Sync);
     let finish_post_request = post_mode.map(|_| {

@@ -1973,7 +1973,13 @@ async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
             source: codex_hooks::SessionStartSource::Startup,
         },
     };
-    assert!(session.hooks().preview_session_start(&request).is_empty());
+    assert!(
+        session
+            .hooks()
+            .await
+            .preview_session_start(&request)
+            .is_empty()
+    );
 
     let config = session.get_config().await;
     let hook_list = codex_hooks::list_hooks(codex_hooks::HooksConfig {
@@ -2011,7 +2017,10 @@ async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
 
     session.reload_user_config_layer().await;
 
-    assert_eq!(session.hooks().preview_session_start(&request).len(), 1);
+    assert_eq!(
+        session.hooks().await.preview_session_start(&request).len(),
+        1
+    );
     Ok(())
 }
 
@@ -2082,7 +2091,13 @@ async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
             source: codex_hooks::SessionStartSource::Startup,
         },
     };
-    assert!(session.hooks().preview_session_start(&request).is_empty());
+    assert!(
+        session
+            .hooks()
+            .await
+            .preview_session_start(&request)
+            .is_empty()
+    );
 
     let current_config = session.get_config().await;
     let next_config = load_latest_config_for_session(&session).await;
@@ -2090,7 +2105,10 @@ async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
         .refresh_runtime_config(current_config, next_config)
         .await;
 
-    assert_eq!(session.hooks().preview_session_start(&request).len(), 1);
+    assert_eq!(
+        session.hooks().await.preview_session_start(&request).len(),
+        1
+    );
     Ok(())
 }
 
@@ -6973,7 +6991,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config.chatgpt_base_url.trim_end_matches('/').to_string(),
             config.analytics_enabled,
         ),
-        hooks: arc_swap::ArcSwap::from_pointee(hooks),
+        hooks: super::hooks::SessionHooks::new(
+            hooks,
+            plugins_manager.loaded_plugins_cache_generation(),
+        ),
         rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell: Arc::new(default_user_shell()),
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -9268,7 +9289,10 @@ where
             config.chatgpt_base_url.trim_end_matches('/').to_string(),
             config.analytics_enabled,
         ),
-        hooks: arc_swap::ArcSwap::from_pointee(hooks),
+        hooks: super::hooks::SessionHooks::new(
+            hooks,
+            plugins_manager.loaded_plugins_cache_generation(),
+        ),
         rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         user_shell: Arc::new(default_user_shell()),
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,

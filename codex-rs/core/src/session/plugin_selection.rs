@@ -11,6 +11,7 @@ impl Session {
             let mut state = self.state.lock().await;
             if state.active_disabled_plugin_ids != turn_context.disabled_plugin_ids {
                 state.active_disabled_plugin_ids = turn_context.disabled_plugin_ids.clone();
+                self.services.hooks.invalidate();
                 self.mark_mcp_runtime_dirty();
             }
             Arc::clone(&state.session_configuration.original_config_do_not_use)
@@ -22,7 +23,7 @@ impl Session {
             .await
             .without_plugins(&turn_context.disabled_plugin_ids);
         // Cache changes from another process do not notify this session's hook runtime.
-        if !self.hooks().matches_plugin_hooks(
+        if !self.hooks().await.matches_plugin_hooks(
             plugin_outcome.iter_effective_plugin_hook_sources(),
             plugin_outcome.iter_effective_plugin_hook_warnings(),
         ) {

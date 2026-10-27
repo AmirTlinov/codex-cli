@@ -919,22 +919,6 @@ impl ThreadManager {
         self.invalidate_starting_mcp_runtimes();
     }
 
-    /// Rebuilds loaded hook runtimes without reloading their session configurations.
-    pub async fn refresh_hook_runtimes(&self) {
-        let threads = self
-            .state
-            .threads
-            .read()
-            .await
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        for thread in threads {
-            let config = thread.session.get_config().await;
-            thread.session.refresh_hooks(config).await;
-        }
-    }
-
     fn invalidate_starting_mcp_runtimes(&self) {
         let mut starting = self
             .state

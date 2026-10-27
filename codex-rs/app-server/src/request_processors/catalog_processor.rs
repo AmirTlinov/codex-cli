@@ -640,7 +640,7 @@ impl CatalogRequestProcessor {
                 .await
                 .map_err(|_| invalid_request(format!("thread not found: {thread_id}")))?;
             let cwd = thread.config_snapshot().await.cwd().to_path_buf();
-            let hooks = thread.list_hooks();
+            let hooks = thread.list_hooks().await;
             return Ok(HooksListResponse {
                 data: vec![codex_app_server_protocol::HooksListEntry {
                     cwd,

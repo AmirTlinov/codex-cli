@@ -69,10 +69,9 @@ impl PluginRequestProcessor {
                             &config_processor,
                         )
                         .await;
-                        // Removals and disablements have no trust write to rebuild loaded hooks.
-                        // Rebuild after the trust attempt, even if it failed, to drop stale hooks.
+                        // Invalidate even when trust fails; the next hook admission must observe removals.
                         if hooks_changed {
-                            processor.thread_manager.refresh_hook_runtimes().await;
+                            processor.thread_manager.plugins_manager().clear_cache();
                         }
                         let _ = complete.send(result);
                     },

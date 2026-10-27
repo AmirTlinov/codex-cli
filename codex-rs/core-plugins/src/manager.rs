@@ -1036,7 +1036,9 @@ impl PluginsManager {
             .map(|cached| cached.plugins.clone())
     }
 
-    fn loaded_plugins_cache_generation(&self) -> u64 {
+    /// Changes when effective plugin inputs are invalidated. Consumers can reconcile
+    /// on their next use without subscribing every idle session to cache changes.
+    pub fn loaded_plugins_cache_generation(&self) -> u64 {
         match self.loaded_plugins_cache.lock() {
             Ok(cache) => cache.generation,
             Err(err) => err.into_inner().generation,

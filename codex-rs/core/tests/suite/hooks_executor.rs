@@ -349,7 +349,7 @@ async fn thread_lists_the_environment_hook_that_blocks_a_turn() -> Result<()> {
         .build_with_auto_env(&server)
         .await?;
     let thread = &test.codex;
-    let initial = thread.list_hooks();
+    let initial = thread.list_hooks().await;
     let selection = thread
         .environment_selections()
         .await
@@ -368,7 +368,7 @@ async fn thread_lists_the_environment_hook_that_blocks_a_turn() -> Result<()> {
     )?;
     thread.environment_ready(&selection, config).await?;
 
-    let listed = thread.list_hooks();
+    let listed = thread.list_hooks().await;
     let entry = listed
         .hooks
         .iter()
@@ -397,7 +397,7 @@ async fn thread_lists_the_environment_hook_that_blocks_a_turn() -> Result<()> {
     thread
         .environment_failed(&selection, "executor disconnected".into())
         .await?;
-    assert_eq!(thread.list_hooks(), initial);
+    assert_eq!(thread.list_hooks().await, initial);
     Ok(())
 }
 
