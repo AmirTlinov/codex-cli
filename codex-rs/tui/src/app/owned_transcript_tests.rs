@@ -75,6 +75,33 @@ pub(in crate::app) fn buffer_text(buffer: &Buffer) -> String {
 }
 
 #[tokio::test]
+async fn transcript_link_open_failure_returns_to_history() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let url = url::Url::from_file_path(directory.path().join("missing.png")).unwrap();
+    let (mut app, mut events, _operations) = make_test_app_with_channels().await;
+    app.open_transcript_link(url.to_string());
+    let error = tokio::time::timeout(Duration::from_secs(/*secs*/ 5), async {
+        while let Some(event) = events.recv().await {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let text = cell
+                    .display_lines(/*width*/ 120)
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if text.contains("Could not open link:") {
+                    return text;
+                }
+            }
+        }
+        panic!("app event channel closed before the opener reported its failure");
+    })
+    .await?;
+    assert!(error.contains("image is no longer available"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn external_writer_escape_returns_to_command_center_without_editing() -> Result<()> {
     for (detailed, scrolled, offline) in [
         (false, false, false),

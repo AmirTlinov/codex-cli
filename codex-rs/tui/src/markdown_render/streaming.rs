@@ -13,6 +13,7 @@ use super::Parser;
 use super::Tag;
 use super::Writer;
 use super::math::MathMarkdown;
+use crate::local_image_links::LocalImageLinks;
 use std::ops::Range;
 use std::path::Path;
 
@@ -42,6 +43,7 @@ pub(crate) fn render_streaming_markdown_lines_with_width_and_cwd(
     cwd: Option<&Path>,
     is_hidden_link_destination: &dyn Fn(&str) -> bool,
     list_spacing: ListSpacing,
+    local_image_links: Option<&LocalImageLinks>,
 ) -> StreamingMarkdownRender {
     render_with_copy_sources(
         input,
@@ -50,6 +52,7 @@ pub(crate) fn render_streaming_markdown_lines_with_width_and_cwd(
         is_hidden_link_destination,
         list_spacing,
         Vec::new(),
+        local_image_links,
     )
 }
 
@@ -60,6 +63,7 @@ pub(crate) fn render_with_copy_sources(
     is_hidden_link_destination: &dyn Fn(&str) -> bool,
     list_spacing: ListSpacing,
     code_sources: Vec<crate::markdown_copy::SourceBlock>,
+    local_image_links: Option<&LocalImageLinks>,
 ) -> StreamingMarkdownRender {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -84,6 +88,7 @@ pub(crate) fn render_with_copy_sources(
         mutable_fence_start: None,
     };
     let mut writer = Writer::new(input, width, cwd, is_hidden_link_destination);
+    writer.local_image_links = local_image_links;
     // Drop the consumed parser before the rendering state, including on unwind.
     let mut parser = parser;
     writer.list_spacing = list_spacing;

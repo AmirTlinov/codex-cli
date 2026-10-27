@@ -4,9 +4,10 @@
 //! Rich prose withholds unfinished link destinations and follow-up directives until closure.
 //! Cropped previews skip completed directives atomically so their prompt text stays hidden.
 
-use super::render::render_source;
+use super::render::render_source_with_list_spacing;
 use crate::history_cell::HistoryRenderMode;
 use crate::inline_visualization::InlineVisualizationContext;
+use crate::local_image_links::LocalImageLinks;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::lines_with_sources_eq;
 use ratatui::text::Line;
@@ -40,6 +41,7 @@ impl ProsePreview {
         cwd: &Path,
         mode: PreviewMode,
         inline_visualization_context: Option<&InlineVisualizationContext>,
+        local_image_links: Option<&LocalImageLinks>,
     ) -> bool {
         // Only scan newly arrived bytes, including on very long single-line responses.
         self.has_pipe |= source[self.scanned_len..].contains('|');
@@ -102,12 +104,14 @@ impl ProsePreview {
             start = range.end;
         }
         let mut lines = match mode {
-            PreviewMode::Prose(render_mode) => render_source(
+            PreviewMode::Prose(render_mode) => render_source_with_list_spacing(
                 &source[start..],
                 width,
                 cwd,
                 render_mode,
                 inline_visualization_context,
+                crate::markdown_render::ListSpacing::AfterMultiline,
+                local_image_links,
             ),
             PreviewMode::Math => textwrap::wrap(&source[start..], width.unwrap_or(usize::MAX))
                 .into_iter()

@@ -8,6 +8,7 @@ use crate::history_cell::HistoryRenderMode;
 use crate::history_cell::raw_lines_from_source;
 use crate::inline_visualization::InlineVisualizationContext;
 use crate::inline_visualization::contains_inline_visualization;
+use crate::local_image_links::LocalImageLinks;
 use crate::markdown::render_markdown_agent_with_list_spacing;
 use crate::markdown::render_streaming_markdown_agent_with_links_and_cwd;
 use crate::markdown_render::ListSpacing;
@@ -16,12 +17,14 @@ use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_hyperlinks::plain_hyperlink_lines;
 use ratatui::text::Line;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Incremental render state split at source and rendered-line boundaries.
 ///
 /// The prefix before both boundaries is immutable; only the final top-level Markdown block is
 /// re-rendered as committed source arrives.
 pub(super) struct StreamingRender {
+    pub(super) local_image_links: Option<Arc<LocalImageLinks>>,
     pub(super) list_spacing: ListSpacing,
     pub(super) lines: Vec<HyperlinkLine>,
     pub(super) pending_math_start: Option<usize>,
@@ -43,6 +46,7 @@ pub(super) struct StreamingRender {
 impl StreamingRender {
     pub(super) fn new() -> Self {
         Self {
+            local_image_links: None,
             list_spacing: ListSpacing::AfterMultiline,
             lines: Vec::with_capacity(64),
             pending_math_start: None,
@@ -92,6 +96,7 @@ impl StreamingRender {
                     width,
                     Some(cwd),
                     self.list_spacing,
+                    self.local_image_links.as_deref(),
                 );
                 self.has_reference_link_definition = rendered.has_reference_link_definition;
                 self.completed_source_len = rendered.last_top_level_block_start.unwrap_or(0);
@@ -107,6 +112,7 @@ impl StreamingRender {
                         width,
                         Some(cwd),
                         self.list_spacing,
+                        self.local_image_links.as_deref(),
                     );
                     self.has_reference_link_definition = rendered.has_reference_link_definition;
                     self.completed_source_len = rendered.last_top_level_block_start.unwrap_or(0);
@@ -120,6 +126,7 @@ impl StreamingRender {
                     render_mode,
                     inline_visualization_context,
                     self.list_spacing,
+                    self.local_image_links.as_deref(),
                 )
             }
         };
@@ -188,6 +195,7 @@ impl StreamingRender {
             width,
             Some(cwd),
             self.list_spacing,
+            self.local_image_links.as_deref(),
         );
         self.pending_math_start = pending
             .pending_math_start
@@ -225,6 +233,7 @@ impl StreamingRender {
                 render_mode,
                 inline_visualization_context,
                 self.list_spacing,
+                self.local_image_links.as_deref(),
             );
             self.stable_source_len += boundary;
             newly_stable_rendered_len = Some(newly_stable.len());
@@ -245,6 +254,7 @@ impl StreamingRender {
     }
 }
 
+#[cfg(test)]
 pub(super) fn render_source(
     source: &str,
     width: Option<usize>,
@@ -259,6 +269,7 @@ pub(super) fn render_source(
         render_mode,
         inline_visualization_context,
         ListSpacing::AfterMultiline,
+        /*local_image_links*/ None,
     )
 }
 
@@ -269,6 +280,7 @@ pub(super) fn render_source_with_list_spacing(
     render_mode: HistoryRenderMode,
     inline_visualization_context: Option<&InlineVisualizationContext>,
     list_spacing: ListSpacing,
+    local_image_links: Option<&LocalImageLinks>,
 ) -> Vec<HyperlinkLine> {
     match render_mode {
         HistoryRenderMode::Rich => render_markdown_agent_with_list_spacing(
@@ -277,6 +289,7 @@ pub(super) fn render_source_with_list_spacing(
             Some(cwd),
             inline_visualization_context,
             list_spacing,
+            local_image_links,
         ),
         HistoryRenderMode::Raw => plain_hyperlink_lines(raw_lines_from_source(source)),
     }

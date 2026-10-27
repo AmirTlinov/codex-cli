@@ -154,7 +154,7 @@ async fn mcp_startup_updates_preserve_streaming_status_suppression() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.set_mcp_startup_expected_servers(["alpha".into(), "beta".into()]);
     handle_turn_started(&mut chat, "turn-1");
-    chat.on_agent_message_delta("Partial response\n".into());
+    chat.on_agent_message_delta("Partial response\n".into(), /*from_replay*/ false);
     chat.on_commit_tick();
     assert!(!chat.bottom_pane.status_indicator_visible());
 

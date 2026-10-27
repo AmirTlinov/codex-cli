@@ -3572,6 +3572,7 @@ fn render_transcript_content_lines(
                 cwd,
                 &|_| false,
                 crate::markdown_render::ListSpacing::AfterMultiline,
+                /*local_image_links*/ None,
             )
             .lines
             .into_iter()

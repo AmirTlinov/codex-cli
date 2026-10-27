@@ -4,6 +4,7 @@
 use super::markdown_render_cache::MarkdownRenderCache;
 use super::*;
 use crate::async_question_reply::AsyncQuestionReply;
+use crate::local_image_links::LocalImageLinks;
 use crate::style::accent_color_on;
 use crate::style::history_prompt_style;
 use crate::terminal_hyperlinks::annotate_web_urls;
@@ -12,6 +13,7 @@ use crate::terminal_hyperlinks::remap_source_wrapped_line;
 use crate::wrapping::url_preserving_wrap_options;
 use crate::wrapping::word_wrap_line_with_source;
 use std::borrow::Cow;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub(crate) struct UserHistoryCell {
@@ -544,9 +546,21 @@ pub(crate) struct AgentMarkdownCell {
     rendered_lines: Option<MarkdownRenderCache>,
     spoken_artifacts: bool,
     question_titles: Vec<std::ops::Range<usize>>,
+    local_image_links: Option<Arc<LocalImageLinks>>,
 }
 
 impl AgentMarkdownCell {
+    pub(crate) fn with_local_image_links(mut self, enabled: bool) -> Self {
+        self.local_image_links = enabled.then(|| Arc::new(LocalImageLinks::new(&self.cwd)));
+        self
+    }
+
+    /// Preserve destinations already shown by the stream, including canonical symlink targets.
+    pub(crate) fn with_captured_image_links(mut self, links: Option<Arc<LocalImageLinks>>) -> Self {
+        self.local_image_links = links;
+        self
+    }
+
     pub(crate) fn with_copy_source(mut self, source: Option<String>) -> Self {
         self.copy_source = source;
         self
@@ -584,6 +598,7 @@ impl AgentMarkdownCell {
             rendered_lines,
             spoken_artifacts: false,
             question_titles: Vec::new(),
+            local_image_links: None,
         }
     }
 
@@ -652,6 +667,7 @@ impl AgentMarkdownCell {
                     Some(self.cwd.as_path()),
                     self.inline_visualization_context.as_ref(),
                     list_spacing,
+                    self.local_image_links.as_deref(),
                 )
             };
             let lines = if self.question_titles.is_empty() {

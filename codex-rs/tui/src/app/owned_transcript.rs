@@ -741,7 +741,7 @@ impl App {
                     }
                 }
             } else if let ViewAction::OpenLink(url) = action {
-                self.open_url_in_browser(url);
+                self.open_transcript_link(url);
             }
         }
         if was_select_mode && !self.transcript_view.is_select_mode() {

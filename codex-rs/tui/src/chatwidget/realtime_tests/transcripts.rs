@@ -477,7 +477,10 @@ async fn stopping_voice_preserves_the_live_transcript_once() {
 async fn transcript_completion_waits_for_normal_agent_stream_consolidation() {
     let (mut chat, _sender, mut events, _ops) = make_chatwidget_manual_with_sender().await;
     activate_voice(&mut chat);
-    chat.on_agent_message_delta("normal typed output".to_string());
+    chat.on_agent_message_delta(
+        "normal typed output".to_string(),
+        /*from_replay*/ false,
+    );
 
     chat.on_realtime_transcript_done("assistant".to_string(), "voice output".to_string());
     chat.on_realtime_transcript_delta(
@@ -498,7 +501,10 @@ async fn transcript_completion_waits_for_normal_agent_stream_consolidation() {
         }
     }
 
-    chat.finalize_completed_assistant_message(Some("normal typed output"));
+    chat.finalize_completed_assistant_message(
+        Some("normal typed output"),
+        /*from_replay*/ false,
+    );
     chat.note_stream_consolidation_completed();
     chat.flush_realtime_transcript_history();
 
@@ -528,7 +534,7 @@ async fn transcript_handoff_moves_deferred_repeats_and_partial_once() {
     let (mut chat, _sender, mut events, _ops) = make_chatwidget_manual_with_sender().await;
     chat.local_settings.tui.animations = false;
     activate_voice(&mut chat);
-    chat.on_agent_message_delta("ordinary stream".to_string());
+    chat.on_agent_message_delta("ordinary stream".to_string(), /*from_replay*/ false);
     for _ in 0..super::super::MAX_PENDING_TRANSCRIPT_CELLS {
         chat.on_realtime_transcript_done("assistant".to_string(), "same words".to_string());
     }
@@ -542,7 +548,7 @@ async fn transcript_handoff_moves_deferred_repeats_and_partial_once() {
     assert_eq!(cells.len(), super::super::MAX_PENDING_TRANSCRIPT_CELLS + 1);
     assert!(chat.take_realtime_transcript_cells_for_replay().is_empty());
     chat.restore_realtime_transcript_cells(cells);
-    chat.finalize_completed_assistant_message(Some("ordinary stream"));
+    chat.finalize_completed_assistant_message(Some("ordinary stream"), /*from_replay*/ false);
     chat.note_stream_consolidation_completed();
     chat.flush_realtime_transcript_history();
 
@@ -579,7 +585,7 @@ async fn transcript_handoff_moves_deferred_repeats_and_partial_once() {
 async fn dropped_deferred_captions_do_not_return_on_thread_replacement() {
     let (mut chat, _sender, _events, _ops) = make_chatwidget_manual_with_sender().await;
     activate_voice(&mut chat);
-    chat.on_agent_message_delta("ordinary stream".to_string());
+    chat.on_agent_message_delta("ordinary stream".to_string(), /*from_replay*/ false);
     for index in 0..(super::super::MAX_PENDING_TRANSCRIPT_CELLS + 2) {
         chat.on_realtime_transcript_done("assistant".into(), format!("caption {index}"));
     }
@@ -846,10 +852,13 @@ async fn completed_user_caption_stays_visible_until_history_commit() {
     assert!(viewport.contains("Keep these words visible."));
 
     // Streaming output can postpone insertion, but must not postpone display.
-    chat.on_agent_message_delta("An earlier answer".into());
+    chat.on_agent_message_delta("An earlier answer".into(), /*from_replay*/ false);
     assert!(chat.take_realtime_transcript_history().is_empty());
     assert!(render_bottom_popup(&chat, /*width*/ 80).contains("Keep these words visible."));
-    chat.finalize_completed_assistant_message(Some("An earlier answer"));
+    chat.finalize_completed_assistant_message(
+        Some("An earlier answer"),
+        /*from_replay*/ false,
+    );
     chat.note_stream_consolidation_completed();
     commit_realtime_history_events(&mut chat, &mut events);
     let history = std::iter::from_fn(|| events.try_recv().ok())
