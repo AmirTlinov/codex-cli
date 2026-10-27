@@ -1210,6 +1210,8 @@ impl Session {
         ));
 
         let mut mcp_auth_changes = auth_manager.auth_change_receiver();
+        let mcp_auth_generation = auth_manager.auth_change_state().generation;
+        let mcp_source_revision = mcp_manager.runtime_source_revision();
         let plugins_manager_for_prewarm = Arc::clone(&plugins_manager);
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
@@ -1665,14 +1667,13 @@ impl Session {
                 &session_configuration.disabled_plugin_ids,
             )
             .await;
-            let (hooks, async_hook_results) = Hooks::new(
-                hooks_config,
+            let hook_mcp_executor = Arc::new(CoreHookMcpExecutor {
+                runtime: Arc::clone(&mcp_runtime),
                 thread_id,
-                Arc::new(CoreHookMcpExecutor {
-                    runtime: Arc::clone(&mcp_runtime),
-                    thread_id,
-                }),
-            )?;
+                session: OnceLock::new(),
+            });
+            let (hooks, async_hook_results) =
+                Hooks::new(hooks_config, thread_id, hook_mcp_executor.clone())?;
             for warning in hooks.startup_warnings() {
                 post_session_configured_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),
@@ -1879,7 +1880,7 @@ impl Session {
                 tool_policy,
                 windows_sandbox_proxy_settings_mode,
                 multi_agent_version,
-                mcp_refresh: McpRefresh::new(),
+                mcp_refresh: McpRefresh::new(mcp_source_revision, mcp_auth_generation),
                 mcp_tool_approval_metadata: Default::default(),
                 mcp_elicitation_reviewer_handle: OnceLock::new(),
                 mcp_elicitation_lifecycle_handle: OnceLock::new(),
@@ -1904,6 +1905,10 @@ impl Session {
                 forked_from_ordinal_exclusive,
                 next_internal_sub_id: AtomicU64::new(0),
             });
+            hook_mcp_executor
+                .session
+                .set(Arc::downgrade(&sess))
+                .expect("MCP hook session is bound once");
             if let Some(startup) = &startup {
                 startup.set_session(Arc::clone(&sess));
             }
@@ -1994,7 +1999,7 @@ impl Session {
                 &resolved_environments,
             ))
             .await?;
-            sess.start_mcp_prewarm_worker(mcp_prewarm_rx, mcp_auth_changes);
+            sess.start_mcp_prewarm_worker(mcp_prewarm_rx);
             sess.follow_inherited_environment_configurations(
                 &inherited_environments,
                 &session_configuration.environments,

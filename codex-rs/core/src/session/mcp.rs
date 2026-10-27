@@ -210,6 +210,19 @@ impl Session {
             return;
         };
         loop {
+            if self
+                .mcp_refresh
+                .observe_source_revision(self.services.mcp_manager.runtime_source_revision())
+            {
+                self.services.mcp_runtime.invalidate_resource_caches();
+                self.mark_mcp_runtime_dirty();
+            }
+            if self
+                .mcp_refresh
+                .observe_auth_generation(self.services.auth_manager.auth_change_state().generation)
+            {
+                self.mark_mcp_runtime_dirty();
+            }
             // Compare and rebuild from current environments, not choices saved for a future turn.
             let environments = self.services.turn_environments.snapshot().await;
             let environment_selections = environments.all_selections();

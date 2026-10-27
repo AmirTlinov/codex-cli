@@ -2477,6 +2477,11 @@ impl AuthManager {
         self.auth_change_state_tx.subscribe()
     }
 
+    /// Reads the current revisions without subscribing an idle consumer to changes.
+    pub fn auth_change_state(&self) -> AuthChangeState {
+        *self.auth_change_state_tx.borrow()
+    }
+
     pub fn refresh_failure_for_auth(&self, auth: &CodexAuth) -> Option<RefreshTokenFailedError> {
         self.inner.read().ok().and_then(|cached| {
             cached
