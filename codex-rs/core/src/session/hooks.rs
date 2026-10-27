@@ -141,6 +141,7 @@ mod tests {
         let session = Arc::new(session);
         let previous = session.services.hooks.shutdown().await;
         session.services.plugins_manager.clear_cache();
+        session.state.lock().await.shutting_down = true;
         let _refresh = session.services.hooks.refresh.try_lock().unwrap();
 
         assert!(
@@ -166,6 +167,30 @@ mod tests {
                     .loaded_plugins_cache_generation()
             )
         );
+    }
+
+    #[tokio::test]
+    async fn ordinary_interrupt_reconciles_pending_hook_configuration() {
+        let (session, turn_context) = make_session_and_context().await;
+        let session = Arc::new(session);
+        let previous = session.hooks().await;
+        let config = session.get_config().await;
+        let mut next = config.as_ref().clone();
+        next.features
+            .disable(codex_features::Feature::CodexHooks)
+            .unwrap();
+        session.refresh_runtime_config(config, next).await;
+        assert!(session.services.hooks.dirty.load(Ordering::Acquire));
+
+        crate::hook_runtime::run_turn_interrupt_hooks(
+            &session,
+            &Arc::new(turn_context),
+            &Mutex::new(crate::state::TurnState::default()),
+        )
+        .await;
+
+        assert!(!session.services.hooks.dirty.load(Ordering::Acquire));
+        assert!(!Arc::ptr_eq(&previous, &session.services.hooks.snapshot()));
     }
 
     #[tokio::test]
