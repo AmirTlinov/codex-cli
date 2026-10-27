@@ -3034,6 +3034,7 @@ dependencies = [
  "indexmap 2.14.0",
  "insta",
  "libc",
+ "lru",
  "maplit",
  "once_cell",
  "openssl-sys",
