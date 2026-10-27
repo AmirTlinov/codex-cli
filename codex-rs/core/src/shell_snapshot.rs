@@ -57,7 +57,6 @@ struct ShellSnapshotConfig {
     codex_home: AbsolutePathBuf,
     session_id: ThreadId,
     session_telemetry: SessionTelemetry,
-    state_db: Option<StateDbHandle>,
     credential_broker: Option<watch::Receiver<SnapshotCredentialBrokerState>>,
     prefer_executor_snapshots: bool,
 }
@@ -112,7 +111,6 @@ impl ShellSnapshot {
         codex_home: AbsolutePathBuf,
         session_id: ThreadId,
         session_telemetry: SessionTelemetry,
-        state_db: Option<StateDbHandle>,
         credential_broker: Option<watch::Sender<SnapshotCredentialBrokerState>>,
         prefer_executor_snapshots: bool,
     ) -> Self {
@@ -121,7 +119,6 @@ impl ShellSnapshot {
                 codex_home,
                 session_id,
                 session_telemetry,
-                state_db,
                 credential_broker: credential_broker.as_ref().map(watch::Sender::subscribe),
                 prefer_executor_snapshots,
             })),
@@ -225,7 +222,6 @@ impl ShellSnapshot {
                 &cwd,
                 &shell_environment_policy,
                 &shell,
-                config.state_db.clone(),
                 credential_broker,
                 sandbox.as_ref(),
             )
@@ -252,7 +248,6 @@ impl ShellSnapshot {
         session_cwd: &AbsolutePathBuf,
         shell_environment_policy: &ShellEnvironmentPolicy,
         shell: &Shell,
-        state_db: Option<StateDbHandle>,
         credential_broker: Option<SnapshotCredentialBroker>,
         sandbox: Option<&ShellSnapshotSandbox>,
     ) -> std::result::Result<ShellSnapshotFile, &'static str> {
@@ -271,17 +266,6 @@ impl ShellSnapshot {
         let temp_path = codex_home
             .join(SNAPSHOT_DIR)
             .join(format!("{session_id}.tmp-{nonce}"));
-
-        // Clean the (unlikely) leaked snapshot files.
-        let codex_home = codex_home.clone();
-        let cleanup_session_id = session_id;
-        tokio::spawn(async move {
-            if let Err(err) =
-                cleanup_stale_snapshots(&codex_home, cleanup_session_id, state_db).await
-            {
-                tracing::warn!("Failed to clean up shell snapshots: {err:?}");
-            }
-        });
 
         // Make the new snapshot.
         let credentials = write_shell_snapshot(
@@ -1123,10 +1107,11 @@ async fn run_script_with_timeout(
 
 /// Removes shell snapshots that either lack a matching session rollout file or
 /// whose rollouts have not been updated within the retention window.
-/// The active session id is exempt from cleanup.
-pub async fn cleanup_stale_snapshots(
+/// Startup maintenance only examines files older than the store that scheduled it;
+/// sessions created while the scan runs own their snapshots until the last user drops them.
+pub(crate) async fn cleanup_stale_snapshots(
     codex_home: &AbsolutePathBuf,
-    active_session_id: ThreadId,
+    started_at: SystemTime,
     state_db: Option<StateDbHandle>,
 ) -> Result<()> {
     let snapshot_dir = codex_home.join(SNAPSHOT_DIR);
@@ -1138,7 +1123,6 @@ pub async fn cleanup_stale_snapshots(
     };
 
     let now = SystemTime::now();
-    let active_session_id = active_session_id.to_string();
 
     while let Some(entry) = entries.next_entry().await? {
         if !entry.file_type().await?.is_file() {
@@ -1146,17 +1130,34 @@ pub async fn cleanup_stale_snapshots(
         }
 
         let path = entry.path();
-
         let file_name = entry.file_name();
         let file_name = file_name.to_string_lossy();
+        // Filesystem mtimes may round down. The generation records when capture
+        // started, including temporary files whose rollout does not exist yet.
+        if snapshot_generation(&file_name).is_some_and(|generation| {
+            started_at
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .is_ok_and(|cutoff| generation >= cutoff.as_nanos())
+        }) {
+            continue;
+        }
+        let modified = match entry
+            .metadata()
+            .await
+            .and_then(|metadata| metadata.modified())
+        {
+            Ok(modified) => modified,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if modified >= started_at {
+            continue;
+        }
+
         let Some(session_id) = snapshot_session_id_from_file_name(&file_name) else {
             remove_snapshot_file(&path).await;
             continue;
         };
-        if session_id == active_session_id {
-            continue;
-        }
-
         let rollout_path =
             find_thread_path_by_id_str(codex_home, session_id, state_db.as_deref()).await?;
         let Some(rollout_path) = rollout_path else {
@@ -1203,6 +1204,15 @@ fn snapshot_session_id_from_file_name(file_name: &str) -> Option<&str> {
         _ if extension.starts_with("tmp-") => Some(stem),
         _ => None,
     }
+}
+
+fn snapshot_generation(file_name: &str) -> Option<u128> {
+    let (stem, extension) = file_name.rsplit_once('.')?;
+    let generation = match extension {
+        "sh" | "ps1" => stem.split_once('.')?.1,
+        _ => extension.strip_prefix("tmp-")?,
+    };
+    generation.parse().ok()
 }
 
 #[cfg(test)]
