@@ -90,7 +90,6 @@ impl MarketplaceRequestProcessor {
             self.thread_manager.plugins_manager().clear_cache();
             self.thread_manager.skills_service().clear_cache();
             self.thread_manager.invalidate_mcp_runtimes().await;
-            self.thread_manager.refresh_hook_runtimes().await;
         }
 
         Ok(MarketplaceUpgradeResponse {

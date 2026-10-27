@@ -28,7 +28,9 @@ impl Session {
             self.mark_mcp_runtime_dirty();
         }
         self.services.mcp_runtime.quiesce_ema().await;
-        self.schedule_mcp_prewarm();
+        if self.active_turn.lock().await.is_some() {
+            self.schedule_mcp_prewarm();
+        }
     }
 
     pub(crate) async fn refresh_runtime_config(
@@ -188,6 +190,7 @@ impl Session {
                     .with_mcp_ema_cancellation(cancellation);
             }
             state.session_configuration.original_config_do_not_use = Arc::clone(&config);
+            self.services.hooks.invalidate();
             drop(policy_guard);
             if matches!(scope, RuntimeConfigRefresh::Mcp) {
                 self.services.mcp_runtime.invalidate_resource_caches();
@@ -205,8 +208,9 @@ impl Session {
             self.services.mcp_runtime.quiesce_ema().await;
         }
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
-        self.schedule_mcp_prewarm();
-        self.refresh_hooks(config).await;
+        if self.active_turn.lock().await.is_some() {
+            self.schedule_mcp_prewarm();
+        }
         outcome
     }
 }

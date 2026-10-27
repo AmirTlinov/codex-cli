@@ -1658,6 +1658,7 @@ impl Session {
             let mcp_runtime = Arc::new(McpRuntime::empty(
                 mcp_projection.config.prefix_mcp_tool_names,
             ));
+            let hooks_generation = plugins_manager.loaded_plugins_cache_generation();
             let hooks_config = build_hooks_config(
                 &config,
                 plugins_manager.as_ref(),
@@ -1770,7 +1771,7 @@ impl Session {
                 ),
                 elicitations: crate::elicitation::ElicitationService::new(),
                 analytics_events_client,
-                hooks: arc_swap::ArcSwap::from_pointee(hooks),
+                hooks: super::hooks::SessionHooks::new(hooks, hooks_generation),
                 rollout_thread_trace,
                 user_shell: Arc::new(default_shell),
                 show_raw_agent_reasoning: config.show_raw_agent_reasoning,

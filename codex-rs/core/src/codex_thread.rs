@@ -1025,13 +1025,16 @@ impl CodexThread {
     }
 
     /// List the thread's current hook declarations, including its selected, ready environments.
-    pub fn list_hooks(&self) -> codex_hooks::HookListOutcome {
+    pub async fn list_hooks(&self) -> codex_hooks::HookListOutcome {
         let environments = self.session.services.turn_environments.snapshot_now();
         let sources = crate::hook_environment_executor::environment_hook_sources(
             &environments,
             /*target_environments*/ &[],
         );
-        self.session.hooks().list_with_environment_hooks(sources)
+        self.session
+            .hooks()
+            .await
+            .list_with_environment_hooks(sources)
     }
 
     /// Observes this thread's published MCP connections that match the requested config.

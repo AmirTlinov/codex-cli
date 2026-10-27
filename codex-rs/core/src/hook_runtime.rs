@@ -63,6 +63,7 @@ use crate::context::HookAdditionalContext;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::event_mapping::parse_turn_item;
 use crate::guardian::GuardianReviewContext;
+use crate::hook_environment_executor::with_captured_environment_hooks;
 use crate::hook_environment_executor::with_environment_hooks;
 use crate::hook_environment_executor::with_tool_environment_hooks;
 use crate::session::TurnInput;
@@ -167,7 +168,8 @@ pub(crate) async fn run_pending_session_start_hooks(
             sess,
             turn_context,
             &turn_context.initial_environments.refresh_readiness(),
-        );
+        )
+        .await;
         let preview_runs = hooks.preview_session_start(&request);
         if run_context_injecting_hook(
             sess,
@@ -220,7 +222,8 @@ pub(crate) async fn run_pre_tool_use_hooks(
         turn_context,
         &step_context.environments,
         target_environments,
-    );
+    )
+    .await;
     let preview_runs = hooks.preview_pre_tool_use(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
@@ -296,7 +299,8 @@ pub(crate) async fn run_permission_request_hooks(
         turn_context,
         review_context.environments(),
         &[target_environment],
-    );
+    )
+    .await;
     let preview_runs = hooks.preview_permission_request(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
@@ -341,7 +345,8 @@ pub(crate) async fn run_post_tool_use_hooks(
         turn_context,
         &step_context.environments,
         target_environments,
-    );
+    )
+    .await;
     let preview_runs = hooks.preview_post_tool_use(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
@@ -441,6 +446,7 @@ pub(crate) async fn run_turn_stop_hooks(
     };
     let executor_hook_sources = step_context.executor_hook_sources.clone();
     let hooks = with_environment_hooks(sess, turn_context, &step_context.environments)
+        .await
         .with_executor_hooks(executor_hook_sources);
     emit_hook_started_events(sess, turn_context, hooks.preview_stop(&request)).await;
 
@@ -451,8 +457,11 @@ pub(crate) async fn run_turn_stop_hooks(
 
 #[instrument(level = "trace", skip_all)]
 pub(crate) async fn run_session_end_hooks(sess: &Arc<Session>) {
+    let Some(hooks) = sess.session_end_hooks().await else {
+        return;
+    };
     // Building a turn can read plugins and skills from a remote executor. Check
-    // the captured hook declarations before spending any of the shutdown deadline.
+    // current declarations before preparing an otherwise unused turn.
     let environments = sess.services.turn_environments.snapshot_now();
     let has_environment_end_hooks = environments.turn_environments().any(|environment| {
         !environment
@@ -461,20 +470,14 @@ pub(crate) async fn run_session_end_hooks(sess: &Arc<Session>) {
             .session_end
             .is_empty()
     });
-    if !has_environment_end_hooks && sess.hooks().preview_session_end().is_empty() {
+    if !has_environment_end_hooks && hooks.preview_session_end().is_empty() {
         return;
     }
 
     let turn_context = sess.new_default_turn().await;
-    let hooks = with_environment_hooks(sess, &turn_context, &environments);
+    let hooks = with_captured_environment_hooks(&hooks, sess, &turn_context, &environments, &[]);
     let preview_runs = hooks.preview_session_end();
     if preview_runs.is_empty() {
-        return;
-    }
-
-    // SessionEnd is root-only; ThreadSpawn uses SubagentStart/SubagentStop and other subagents
-    // are internal implementation details.
-    if matches!(&turn_context.session_source, SessionSource::SubAgent(_)) {
         return;
     }
 
@@ -510,13 +513,18 @@ pub(crate) async fn run_turn_interrupt_hooks(
         .map(|step| step.executor_hook_sources.clone())
         .unwrap_or_default();
     let has_executor_hooks = !executor_hook_sources.is_empty();
-    let hooks = last_known_step_context
-        .as_deref()
-        .map_or_else(
-            || (*sess.hooks()).clone(),
-            |step| with_environment_hooks(sess, &step.turn, &step.environments),
-        )
-        .with_executor_hooks(executor_hook_sources);
+    let captured_hooks = sess.hooks().await;
+    let hooks = match last_known_step_context.as_deref() {
+        Some(step) => with_captured_environment_hooks(
+            &captured_hooks,
+            sess,
+            &step.turn,
+            &step.environments,
+            &[],
+        ),
+        None => (*captured_hooks).clone(),
+    }
+    .with_executor_hooks(executor_hook_sources);
     let preview_runs = hooks.preview_interrupt();
     if preview_runs.is_empty() && !has_executor_hooks {
         return;
@@ -561,7 +569,8 @@ pub(crate) async fn run_pre_compact_hooks(
         sess,
         turn_context,
         &turn_context.initial_environments.refresh_readiness(),
-    );
+    )
+    .await;
     let preview_runs = hooks.preview_pre_compact(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
@@ -603,7 +612,8 @@ pub(crate) async fn run_post_compact_hooks(
         sess,
         turn_context,
         &turn_context.initial_environments.refresh_readiness(),
-    );
+    )
+    .await;
     let preview_runs = hooks.preview_post_compact(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
@@ -631,7 +641,7 @@ pub(crate) async fn run_legacy_after_agent_hook(
             _ => None,
         })
         .collect();
-    let hooks = sess.hooks();
+    let hooks = sess.hooks().await;
     for hook_outcome in hooks
         .dispatch(codex_hooks::HookPayload {
             session_id: sess.session_id().into(),
@@ -707,7 +717,8 @@ pub(crate) async fn inspect_pending_input(
                 sess,
                 turn_context,
                 &turn_context.initial_environments.refresh_readiness(),
-            );
+            )
+            .await;
             let preview_runs = hooks.preview_user_prompt_submit(&request);
             run_context_injecting_hook(
                 sess,
@@ -1089,7 +1100,7 @@ fn compaction_trigger_label(value: CompactionTrigger) -> &'static str {
     }
 }
 
-pub(crate) fn hooks_for_model_request(
+pub(crate) async fn hooks_for_model_request(
     session: &Arc<Session>,
     step: &StepContext,
 ) -> Arc<codex_hooks::Hooks> {
@@ -1098,13 +1109,10 @@ pub(crate) fn hooks_for_model_request(
         | SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => Arc::new(
             session
                 .hooks()
+                .await
                 .for_memory_consolidation(step.executor_hook_sources.clone()),
         ),
-        _ => Arc::new(with_environment_hooks(
-            session,
-            &step.turn,
-            &step.environments,
-        )),
+        _ => Arc::new(with_environment_hooks(session, &step.turn, &step.environments).await),
     }
 }
 

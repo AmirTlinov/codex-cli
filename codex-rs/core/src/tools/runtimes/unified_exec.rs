@@ -366,6 +366,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecAttempt> for UnifiedExecRunt
                     let timeout = ctx
                         .session
                         .hooks()
+                        .await
                         .max_permission_request_timeout()
                         .saturating_add(GUARDIAN_REVIEW_TIMEOUT)
                         .saturating_add(REMOTE_NETWORK_POLICY_DECISION_MARGIN);

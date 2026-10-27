@@ -252,7 +252,7 @@ fn prompt_options(
     }
 }
 
-fn install_mcp_permission_request_hook(
+async fn install_mcp_permission_request_hook(
     session: &mut Session,
     turn_context: &TurnContext,
     matcher: &str,
@@ -323,7 +323,7 @@ print({hook_output:?})
         hook_list.hooks,
     );
 
-    let hooks = session.hooks().reconfigured(HooksConfig {
+    let hooks = session.hooks().await.reconfigured(HooksConfig {
         feature_enabled: true,
         config_layer_stack: Some(trusted_config_layer_stack),
         shell_program: (!cfg!(windows)).then_some("/bin/sh".to_string()),
@@ -2958,7 +2958,8 @@ async fn permission_request_hook_allows_mcp_tool_call() {
                 "decision": { "behavior": "allow" }
             }
         }),
-    );
+    )
+    .await;
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let invocation = McpInvocation {
@@ -3056,7 +3057,8 @@ async fn permission_request_hook_uses_hook_tool_name_without_metadata() {
                 "decision": { "behavior": "allow" }
             }
         }),
-    );
+    )
+    .await;
     let session = Arc::new(session);
     let turn_context = Arc::new(turn_context);
     let invocation = McpInvocation {
@@ -3133,7 +3135,8 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
                 }
             }
         }),
-    );
+    )
+    .await;
     let invocation = McpInvocation {
         server: "memory".to_string(),
         tool: "create_entities".to_string(),
