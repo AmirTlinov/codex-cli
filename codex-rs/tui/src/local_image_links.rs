@@ -57,6 +57,14 @@ fn is_image(path: &Path) -> bool {
         })
 }
 
+fn is_supported_image_path(path: &Path) -> bool {
+    is_image(path)
+        && path.to_str().is_some_and(|text| !text.chars().any(char::is_control))
+        && !path.components().any(|component| {
+            matches!(component, std::path::Component::Normal(name) if name.to_string_lossy().contains(':'))
+        })
+}
+
 fn resolve_image(cwd: &Path, destination: &str) -> Option<Url> {
     if destination.len() > 8 * 1024 || destination.chars().any(char::is_control) {
         return None;
@@ -79,17 +87,13 @@ fn resolve_image(cwd: &Path, destination: &str) -> Option<Url> {
         path.to_owned()
     };
     let text = path.to_str()?;
-    if text.starts_with(['~', '\\'])
-        || text.starts_with("//")
-        || text.chars().any(char::is_control)
-        || !is_image(&path)
-        || path.components().any(|component| matches!(component, std::path::Component::Normal(name) if name.to_string_lossy().contains(':')))
-    {
+    if text.starts_with(['~', '\\']) || text.starts_with("//") || !is_supported_image_path(&path) {
         return None;
     }
-    // Canonicalize before exporting a file URI so a symlink cannot target a different file type.
+    // Validate the resolved path too: symlinks can change the file type or point to a network share.
     let path = cwd.join(path).canonicalize().ok()?;
-    if !is_image(&path) || !path.is_file() {
+    let url = Url::from_file_path(&path).ok()?;
+    if url.host_str().is_some() || !is_supported_image_path(&path) || !path.is_file() {
         return None;
     }
     // Desktop openers may use content-based MIME detection instead of the filename extension.
@@ -112,7 +116,7 @@ fn resolve_image(cwd: &Path, destination: &str) -> Option<Url> {
     ) {
         return None;
     }
-    Url::from_file_path(path).ok()
+    Some(url)
 }
 
 /// Image links use the associated viewer; web links and generated HTML retain browser behavior.

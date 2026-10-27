@@ -94,6 +94,25 @@ fn image_named_symlink_cannot_open_another_file_type() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn image_symlinks_cannot_bypass_path_validation() -> anyhow::Result<()> {
+    let directory = tempfile::tempdir()?;
+    for (name, target) in [
+        ("newline.png", "line\nbreak.png"),
+        ("colon.png", "file:stream.png"),
+    ] {
+        let target = image_in(directory.path(), target)?;
+        std::os::unix::fs::symlink(target, directory.path().join(name))?;
+        assert!(
+            LocalImageLinks::new(directory.path())
+                .resolve(name)
+                .is_none()
+        );
+    }
+    Ok(())
+}
+
 fn assert_image_links(lines: &[HyperlinkLine], expected: &Url) {
     let linked_rows = lines
         .iter()
