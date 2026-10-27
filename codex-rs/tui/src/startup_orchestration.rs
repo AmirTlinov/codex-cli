@@ -13,6 +13,11 @@ pub(super) async fn run_main_inner(
     loader_overrides: LoaderOverrides,
     mut explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
 ) -> std::io::Result<AppExitInfo> {
+    // codex-mine must execute its patched backend when launched locally.
+    // Explicit remote connections and the shared agents overview keep their routing.
+    if explicit_remote_endpoint.is_none() && !cli.agents_overview {
+        cli.no_daemon = true;
+    }
     if cli.no_daemon && explicit_remote_endpoint.is_some() {
         return Err(std::io::Error::other(
             "--no-daemon cannot be used with --remote.",
