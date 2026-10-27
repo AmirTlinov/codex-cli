@@ -426,6 +426,24 @@ async fn deletion_batch_switches_to_fallback_before_handling_parent_event() {
     assert_eq!(watcher.state.read().unwrap().path_resolutions, 1);
 }
 
+#[tokio::test]
+async fn unrelated_batch_path_preserves_fallback_transition_before_parent_event() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let root = directory.path().canonicalize().expect("canonical root");
+    let file = root.join("FETCH_HEAD");
+    std::fs::write(&file, "origin/main\n").expect("write file");
+    let watcher = Arc::new(FileWatcher::noop());
+    let (subscriber, mut rx) = watcher.add_subscriber();
+    let _registration = subscriber.register_path(file.clone(), false);
+    std::fs::remove_file(&file).expect("remove file");
+
+    watcher
+        .send_paths_for_test(vec![root.join("FETCH_HEAD.lock"), root])
+        .await;
+    assert_eq!(rx.recv().await.unwrap().paths, vec![file]);
+    assert_eq!(watcher.state.read().unwrap().path_resolutions, 1);
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn indexed_events_match_both_symlink_and_canonical_paths() {

@@ -3,6 +3,7 @@
 
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -730,14 +731,12 @@ impl FileWatcher {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut actual_watch_moves = Vec::new();
             let mut changed_by_subscriber: HashMap<SubscriberId, Vec<PathBuf>> = HashMap::new();
-            let mut events_by_watch: HashMap<SubscriberWatchKey, Vec<&PathBuf>> = HashMap::new();
+            let mut affected_watches = HashSet::new();
             for event_path in event_paths {
-                for watch in state.watch_index.matching(event_path) {
-                    events_by_watch.entry(watch).or_default().push(event_path);
-                }
+                affected_watches.extend(state.watch_index.matching(event_path));
             }
 
-            for (subscriber_watch, paths) in events_by_watch {
+            for subscriber_watch in affected_watches {
                 // Resolve a shared path once, regardless of how many chats watch it.
                 let (new_actual, _new_matched, fallback) =
                     actual_watch_path(&subscriber_watch.requested);
@@ -764,7 +763,9 @@ impl FileWatcher {
                     else {
                         continue;
                     };
-                    for event_path in &paths {
+                    // Earlier paths can move a missing watch to its fallback even
+                    // when they do not emit a notification for this subscriber.
+                    for event_path in event_paths {
                         if let Some(path) = changed_path_for_event(
                             &subscriber_watch,
                             subscriber_watch_state,
