@@ -19,6 +19,34 @@ use codex_protocol::protocol::TurnCompleteEvent;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
+#[test]
+fn residency_order_tracks_touches_and_removal_without_duplicating_entries() {
+    let residency = super::V2Residency::default();
+    let first = ThreadId::new();
+    let second = ThreadId::new();
+    let third = ThreadId::new();
+    for id in [first, second, third, first] {
+        residency.touch(id);
+    }
+    let oldest_first = || {
+        residency
+            .state
+            .lock()
+            .unwrap()
+            .residents
+            .iter()
+            .rev()
+            .map(|(id, ())| *id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(oldest_first(), vec![second, third, first]);
+    residency.remove(third);
+    residency.remove(third);
+    assert_eq!(oldest_first(), vec![second, first]);
+    residency.touch(third);
+    assert_eq!(oldest_first(), vec![second, first, third]);
+}
+
 #[tokio::test]
 async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
     let mut config = test_config().await;
